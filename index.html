@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Battleship AI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Battleship vs AI</h1>
+    <div class="controls">
+      <button id="new-game">New Game</button>
+      <label for="difficulty">Enemy AI:</label>
+      <select id="difficulty">
+        <option value="random">Random</option>
+        <option value="hunt" disabled>Hunt & Target</option>
+        <option value="probability" disabled>Probability Density</option>
+      </select>
+      <button id="mode-toggle" disabled>Mode: Manual</button>
+    </div>
+    <div class="status" id="status">Click a cell on the enemy board to fire.</div>
+    <div class="boards">
+      <div class="board-wrap">
+        <h2>Your Fleet</h2>
+        <div id="player-board" class="board"></div>
+      </div>
+      <div class="board-wrap">
+        <h2>Enemy Waters</h2>
+        <div id="enemy-board" class="board"></div>
+      </div>
+    </div>
+    <section class="logs">
+      <h2>Battle Log</h2>
+      <ul id="log-list"></ul>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
