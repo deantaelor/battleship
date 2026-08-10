@@ -23,6 +23,10 @@ const statusEl = document.getElementById('status');
 const logListEl = document.getElementById('log-list');
 const difficultySelect = document.getElementById('difficulty');
 const modeToggleBtn = document.getElementById('mode-toggle');
+const delegatedControls = document.getElementById('delegated-controls');
+const orderInput = document.getElementById('order-input');
+const orderFireBtn = document.getElementById('order-fire');
+const gunnerResponse = document.getElementById('gunner-response');
 
 function createEmptyBoard() {
   return Array.from({ length: BOARD_SIZE }, () =>
@@ -100,6 +104,9 @@ function initGame() {
     heatMax: 0
   };
 
+  delegatedControls.style.display = 'none';
+  gunnerResponse.textContent = '';
+  orderInput.value = '';
   logListEl.innerHTML = '';
   log('New game started. Click the enemy board to fire.');
   updateStatus('Your turn. Click a cell on the enemy board to fire.');
@@ -193,35 +200,45 @@ function endGame(winner) {
   log(`Game over — ${winner} wins!`);
 }
 
-function handlePlayerFire(r, c) {
-  if (state.gameOver || state.turn !== 'player' || state.mode !== 'manual') return;
+function executePlayerFire(shooter, r, c, reason) {
+  if (state.gameOver || state.turn !== 'player') return false;
 
   const result = fire(state.enemyBoard, state.enemyShips, r, c);
   if (result.alreadyFired) {
-    updateStatus('You already fired there. Pick another cell.');
-    return;
+    updateStatus(`${shooter} already fired there. Pick another cell.`);
+    return false;
   }
 
+  const verb = shooter === 'You' ? 'fire' : 'fires';
+  let msg = `${shooter} ${verb} at ${coordLabel(r, c)}`;
   if (result.hit && result.sunk) {
-    log(`You fire at ${coordLabel(r, c)} — hit and sunk the ${result.ship.name}!`);
-    updateStatus(`You sank the ${result.ship.name}! Enemy turn...`);
+    msg += ` — hit and sunk the ${result.ship.name}!`;
+    updateStatus(`${shooter} sank the ${result.ship.name}! Enemy turn...`);
   } else if (result.hit) {
-    log(`You fire at ${coordLabel(r, c)} — hit.`);
-    updateStatus('Hit! Enemy turn...');
+    msg += ` — hit.`;
+    updateStatus(`${shooter} hit! Enemy turn...`);
   } else {
-    log(`You fire at ${coordLabel(r, c)} — miss.`);
-    updateStatus('Miss. Enemy turn...');
+    msg += ` — miss.`;
+    updateStatus(`${shooter} missed. Enemy turn...`);
   }
+  if (reason) msg += ` (${reason})`;
+  log(msg);
 
   render();
 
   if (allSunk(state.enemyShips)) {
     endGame('Player');
-    return;
+    return true;
   }
 
   state.turn = 'enemy';
   setTimeout(aiTurn, 600);
+  return true;
+}
+
+function handlePlayerFire(r, c) {
+  if (state.gameOver || state.turn !== 'player' || state.mode !== 'manual') return;
+  executePlayerFire('You', r, c, null);
 }
 
 function getAvailableCells(board) {
@@ -243,6 +260,10 @@ function getUnsunkHits(board) {
     }
   }
   return hits;
+}
+
+function isUnknown(cell) {
+  return cell.status !== STATUS.HIT && cell.status !== STATUS.MISS && cell.status !== STATUS.SUNK;
 }
 
 function getAdjacentCells(r, c) {
@@ -293,6 +314,24 @@ function computeProbabilityHeat(board, ships) {
   return heat;
 }
 
+function computeShipHeat(board, ship) {
+  const heat = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(0));
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      for (const horizontal of [true, false]) {
+        if (canPlaceForProbability(board, ship, r, c, horizontal)) {
+          for (let i = 0; i < ship.size; i++) {
+            const rr = horizontal ? r : r + i;
+            const cc = horizontal ? c + i : c;
+            heat[rr][cc] += 1;
+          }
+        }
+      }
+    }
+  }
+  return heat;
+}
+
 function updateHeatmap() {
   if (!state) return;
   const { playerBoard, playerShips, difficulty } = state;
@@ -312,7 +351,6 @@ function updateHeatmap() {
     heat = computeProbabilityHeat(playerBoard, playerShips);
     max = Math.max(1, ...heat.flat());
   } else {
-    // Random: uniform faint heat
     max = 1;
   }
 
@@ -403,6 +441,185 @@ function aiTurn() {
   state.turn = 'player';
 }
 
+function parseCoordinate(text) {
+  const match = text.match(/\b([a-jA-J])\s*(\d{1,2})\b/);
+  if (match) {
+    const r = match[1].toUpperCase().charCodeAt(0) - 65;
+    const c = parseInt(match[2], 10) - 1;
+    if (c >= 0 && c < BOARD_SIZE) return { r, c };
+  }
+  const match2 = text.match(/\b(\d{1,2})\s*([a-jA-J])\b/);
+  if (match2) {
+    const c = parseInt(match2[1], 10) - 1;
+    const r = match2[2].toUpperCase().charCodeAt(0) - 65;
+    if (c >= 0 && c < BOARD_SIZE) return { r, c };
+  }
+  return null;
+}
+
+function filterAvailable(board, filter) {
+  const cells = [];
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (filter(r, c) && isUnknown(board[r][c])) cells.push({ r, c });
+    }
+  }
+  return cells;
+}
+
+function parseQuadrant(text) {
+  if (/top\s*right|upper\s*right/.test(text)) return { name: 'top-right quadrant', filter: (r, c) => r < 5 && c >= 5 };
+  if (/top\s*left|upper\s*left/.test(text)) return { name: 'top-left quadrant', filter: (r, c) => r < 5 && c < 5 };
+  if (/bottom\s*right|lower\s*right/.test(text)) return { name: 'bottom-right quadrant', filter: (r, c) => r >= 5 && c >= 5 };
+  if (/bottom\s*left|lower\s*left/.test(text)) return { name: 'bottom-left quadrant', filter: (r, c) => r >= 5 && c < 5 };
+  if (/\btop\b/.test(text)) return { name: 'top half', filter: (r, c) => r < 5 };
+  if (/\bbottom\b/.test(text)) return { name: 'bottom half', filter: (r, c) => r >= 5 };
+  if (/\bleft\b/.test(text)) return { name: 'left half', filter: (r, c) => c < 5 };
+  if (/\bright\b/.test(text)) return { name: 'right half', filter: (r, c) => c >= 5 };
+  return null;
+}
+
+function pickBestFromHeat(board, ships) {
+  const heat = computeProbabilityHeat(board, ships);
+  let best = null;
+  let bestScore = -1;
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (!isUnknown(board[r][c])) continue;
+      if (heat[r][c] > bestScore) {
+        bestScore = heat[r][c];
+        best = { r, c };
+      }
+    }
+  }
+  return { best, bestScore };
+}
+
+function gunnerPick(order) {
+  const board = state.enemyBoard;
+  const ships = state.enemyShips;
+  const text = order.toLowerCase();
+
+  // Finish off wounded ships
+  if (/finish|wound|wounded|hurt|hurting|sink|sinking|kill|killing/.test(text)) {
+    const hits = getUnsunkHits(board);
+    if (hits.length > 0) {
+      const candidates = [];
+      for (const { r, c } of hits) {
+        for (const cell of getAdjacentCells(r, c)) {
+          if (isUnknown(board[cell.r][cell.c])) candidates.push(cell);
+        }
+      }
+      if (candidates.length > 0) {
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        return { ...pick, reason: 'finishing off a wounded ship' };
+      }
+    }
+    const { best, bestScore } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `no wounded targets, highest-probability cell (score ${bestScore})` };
+    const cell = pickRandomCell(board);
+    return { ...cell, reason: 'no wounded targets, firing randomly' };
+  }
+
+  // Hunt a specific ship
+  const shipMatch = text.match(/\b(carrier|battleship|cruiser|submarine|destroyer)\b/);
+  if (shipMatch) {
+    const shipId = shipMatch[1];
+    const ship = findShip(ships, shipId);
+    if (ship.sunk) {
+      const { best, bestScore } = pickBestFromHeat(board, ships);
+      if (best) return { ...best, reason: `${ship.name} already sunk, using next-best probability (score ${bestScore})` };
+      const cell = pickRandomCell(board);
+      return { ...cell, reason: `${ship.name} already sunk, firing randomly` };
+    }
+    const heat = computeShipHeat(board, ship);
+    let best = null;
+    let bestScore = -1;
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        if (!isUnknown(board[r][c])) continue;
+        if (heat[r][c] > bestScore) {
+          bestScore = heat[r][c];
+          best = { r, c };
+        }
+      }
+    }
+    if (best) return { ...best, reason: `hunting the ${ship.name}` };
+    const cell = pickRandomCell(board);
+    return { ...cell, reason: `could not place the ${ship.name}, firing randomly` };
+  }
+
+  // Around a coordinate
+  const coord = parseCoordinate(text);
+  if (coord && /around|near|close|adjacent|next to/.test(text)) {
+    const candidates = getAdjacentCells(coord.r, coord.c).filter(cell => isUnknown(board[cell.r][cell.c]));
+    if (candidates.length > 0) {
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      return { ...pick, reason: `searching around ${coordLabel(coord.r, coord.c)}` };
+    }
+    const { best, bestScore } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `no open cells near ${coordLabel(coord.r, coord.c)}, using probability (score ${bestScore})` };
+    const cell = pickRandomCell(board);
+    return { ...cell, reason: `no open cells near ${coordLabel(coord.r, coord.c)}, firing randomly` };
+  }
+
+  // Quadrant / half
+  const quad = parseQuadrant(text);
+  if (quad) {
+    const candidates = filterAvailable(board, quad.filter);
+    if (candidates.length > 0) {
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      return { ...pick, reason: `working the ${quad.name}` };
+    }
+    const { best, bestScore } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `${quad.name} is empty, using probability (score ${bestScore})` };
+    const cell = pickRandomCell(board);
+    return { ...cell, reason: `${quad.name} is empty, firing randomly` };
+  }
+
+  // Center
+  if (/center|middle/.test(text)) {
+    const candidates = filterAvailable(board, (r, c) => r >= 3 && r <= 6 && c >= 3 && c <= 6);
+    if (candidates.length > 0) {
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      return { ...pick, reason: 'working the center' };
+    }
+    const { best, bestScore } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `center is empty, using probability (score ${bestScore})` };
+    const cell = pickRandomCell(board);
+    return { ...cell, reason: 'center is empty, firing randomly' };
+  }
+
+  // Random / anywhere
+  if (/random|anywhere|whatever|surprise/.test(text)) {
+    const cell = pickRandomCell(board);
+    return { ...cell, reason: 'firing at random' };
+  }
+
+  // Default: highest probability
+  const { best, bestScore } = pickBestFromHeat(board, ships);
+  if (best) return { ...best, reason: `highest-probability cell (score ${bestScore})` };
+  const cell = pickRandomCell(board);
+  return { ...cell, reason: 'falling back to random' };
+}
+
+function handleDelegatedFire() {
+  if (!state || state.gameOver || state.turn !== 'player' || state.mode !== 'delegated') return;
+  const order = orderInput.value.trim();
+  if (!order) {
+    updateStatus('Type an order for the gunner first.');
+    return;
+  }
+  const pick = gunnerPick(order);
+  if (!pick) {
+    updateStatus('Gunner could not interpret that order.');
+    return;
+  }
+  gunnerResponse.textContent = `Aye aye, ${pick.reason}. Firing at ${coordLabel(pick.r, pick.c)}.`;
+  orderInput.value = '';
+  executePlayerFire('Gunner', pick.r, pick.c, pick.reason);
+}
+
 enemyBoardEl.addEventListener('click', e => {
   const cell = e.target.closest('.cell');
   if (!cell) return;
@@ -424,9 +641,19 @@ modeToggleBtn.addEventListener('click', () => {
   if (!state) return;
   state.mode = state.mode === 'manual' ? 'delegated' : 'manual';
   modeToggleBtn.textContent = `Mode: ${state.mode === 'manual' ? 'Manual' : 'Delegated'}`;
-  updateStatus(state.mode === 'manual'
-    ? 'Switched to manual mode. Click a cell to fire.'
-    : 'Switched to delegated mode. Type an order below. (not yet implemented)');
+  delegatedControls.style.display = state.mode === 'delegated' ? 'flex' : 'none';
+  gunnerResponse.textContent = '';
+  if (state.mode === 'delegated') {
+    updateStatus('Delegated mode. Type an order for the gunner and press Fire.');
+    orderInput.focus();
+  } else {
+    updateStatus('Manual mode. Click a cell on the enemy board to fire.');
+  }
+});
+
+orderFireBtn.addEventListener('click', handleDelegatedFire);
+orderInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') handleDelegatedFire();
 });
 
 initGame();

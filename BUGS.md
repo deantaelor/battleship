@@ -22,3 +22,8 @@ Keep a running list of issues we hit while building, plus how we fixed them.
 - **Fix**: Reformatted the reason string so logs read "Enemy fires at X — miss, highest probability cell (score 23)."
 - **Date**: 2026-08-10
 
+## 5. No API key for the LLM gunner
+- **Symptom**: Delegated mode was planned to use an LLM to parse plain-language orders, but no OpenAI/Anthropic API key was available.
+- **Fix**: Built a rule-based “gunner” agent in the browser that parses keywords like carrier, top-right, around A5, finish off, etc. and explains its choice. The rule parser can be swapped for an LLM call later by replacing `gunnerPick()`.
+- **Date**: 2026-08-10
+

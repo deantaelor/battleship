@@ -17,8 +17,15 @@
         <option value="hunt">Hunt & Target</option>
         <option value="probability">Probability Density</option>
       </select>
-      <button id="mode-toggle" disabled>Mode: Manual</button>
+      <button id="mode-toggle">Mode: Manual</button>
     </div>
+    <div id="delegated-controls" class="delegated-controls" style="display: none;">
+      <label for="order-input">Order to gunner:</label>
+      <input id="order-input" type="text" placeholder="e.g. finish off whatever we wounded" autocomplete="off">
+      <button id="order-fire">Fire</button>
+      <div id="gunner-response" class="gunner-response"></div>
+    </div>
+    <p class="instructions">Manual mode: click a cell on the enemy board. Delegated mode: type an order for the gunner, e.g. “hunt the carrier”, “work the top right quadrant”, or “finish off whatever we wounded”, then press Fire. The enemy AI uses the selected difficulty; its heatmap and reasoning appear on your board.</p>
     <div class="status" id="status">Click a cell on the enemy board to fire.</div>
     <div class="boards">
       <div class="board-wrap">
