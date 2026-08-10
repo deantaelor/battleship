@@ -21,12 +21,16 @@ const playerBoardEl = document.getElementById('player-board');
 const enemyBoardEl = document.getElementById('enemy-board');
 const statusEl = document.getElementById('status');
 const logListEl = document.getElementById('log-list');
-const difficultySelect = document.getElementById('difficulty');
-const modeToggleBtn = document.getElementById('mode-toggle');
-const delegatedControls = document.getElementById('delegated-controls');
+const difficultySelect = document.getElementById('difficulty-select');
+const commandPanel = document.getElementById('command-panel');
 const orderInput = document.getElementById('order-input');
-const orderFireBtn = document.getElementById('order-fire');
-const gunnerResponse = document.getElementById('gunner-response');
+const actionBtn = document.getElementById('action-btn');
+const approveBtn = document.getElementById('approve-btn');
+const abortBtn = document.getElementById('abort-btn');
+const proposalEl = document.getElementById('proposal');
+const reportEl = document.getElementById('report');
+const reportBody = document.getElementById('report-body');
+const autonomyTabs = document.querySelectorAll('[data-autonomy]');
 
 function createEmptyBoard() {
   return Array.from({ length: BOARD_SIZE }, () =>
@@ -98,18 +102,26 @@ function initGame() {
     enemyShips,
     turn: 'player',
     gameOver: false,
+    autonomy: state ? state.autonomy : 'manual',
     difficulty: difficultySelect.value,
-    mode: 'manual',
     heat: null,
-    heatMax: 0
+    heatMax: 0,
+    proposal: null,
+    autonomousActive: false,
+    abortAutonomous: false,
+    autonomousOrder: null,
+    shotCount: 0,
+    history: []
   };
 
-  delegatedControls.style.display = 'none';
-  gunnerResponse.textContent = '';
-  orderInput.value = '';
   logListEl.innerHTML = '';
-  log('New game started. Click the enemy board to fire.');
-  updateStatus('Your turn. Click a cell on the enemy board to fire.');
+  proposalEl.textContent = '';
+  orderInput.value = '';
+  reportEl.style.display = 'none';
+
+  updateAutonomyUI();
+  log('New game started.');
+  updateStatusForAutonomy();
   updateHeatmap();
   render();
 }
@@ -138,10 +150,9 @@ function renderBoard(element, board, hideShips, heat, heatMax) {
         const h = heat[r][c];
         const max = heatMax || 1;
         const factor = h / max;
-        const hue = 220 - factor * 220;
-        const opacity = 0.25 + factor * 0.55;
+        const opacity = 0.15 + factor * 0.5;
         cell.classList.add('heat');
-        cell.style.setProperty('--heat-color', `hsl(${hue}, 85%, 55%)`);
+        cell.style.setProperty('--heat-color', 'var(--heat)');
         cell.style.setProperty('--heat-opacity', opacity.toFixed(2));
       }
 
@@ -162,6 +173,16 @@ function log(msg) {
 
 function updateStatus(msg) {
   statusEl.textContent = msg;
+}
+
+function updateStatusForAutonomy() {
+  if (state.autonomy === 'manual') {
+    updateStatus('Manual mode: click a cell on the enemy board to fire.');
+  } else if (state.autonomy === 'advised') {
+    updateStatus('Advised mode: give an order, review the gunner’s proposal, then approve or override by clicking a cell.');
+  } else {
+    updateStatus('Autonomous mode: give an order and the gunner will fire repeatedly until it’s done or you stand it down.');
+  }
 }
 
 function findShip(ships, shipId) {
@@ -196,11 +217,14 @@ function allSunk(ships) {
 
 function endGame(winner) {
   state.gameOver = true;
-  updateStatus(`Game over — ${winner} wins!`);
-  log(`Game over — ${winner} wins!`);
+  finishAutonomous();
+  updateStatus(`Game over — ${winner === 'Player' ? 'you' : 'the enemy'} won.`);
+  log(`Game over — ${winner === 'Player' ? 'you' : 'the enemy'} won.`);
+  render();
+  setTimeout(() => showReport(winner), 400);
 }
 
-function executePlayerFire(shooter, r, c, reason) {
+function fireAtEnemy(shooter, r, c, reason) {
   if (state.gameOver || state.turn !== 'player') return false;
 
   const result = fire(state.enemyBoard, state.enemyShips, r, c);
@@ -209,21 +233,37 @@ function executePlayerFire(shooter, r, c, reason) {
     return false;
   }
 
+  state.shotCount++;
+  state.history.push({
+    actor: 'player',
+    r,
+    c,
+    result: result.hit ? (result.sunk ? 'sunk' : 'hit') : 'miss',
+    shipName: result.ship ? result.ship.name : null,
+    reason,
+    shotNumber: state.shotCount
+  });
+
   const verb = shooter === 'You' ? 'fire' : 'fires';
   let msg = `${shooter} ${verb} at ${coordLabel(r, c)}`;
   if (result.hit && result.sunk) {
     msg += ` — hit and sunk the ${result.ship.name}!`;
-    updateStatus(`${shooter} sank the ${result.ship.name}! Enemy turn...`);
+    updateStatus(`${shooter} sank the ${result.ship.name}!`);
   } else if (result.hit) {
     msg += ` — hit.`;
-    updateStatus(`${shooter} hit! Enemy turn...`);
+    updateStatus(`${shooter} hit!`);
   } else {
     msg += ` — miss.`;
-    updateStatus(`${shooter} missed. Enemy turn...`);
+    updateStatus(`${shooter} missed.`);
   }
   if (reason) msg += ` (${reason})`;
   log(msg);
 
+  state.proposal = null;
+  proposalEl.textContent = '';
+  approveBtn.style.display = 'none';
+
+  updateHeatmap();
   render();
 
   if (allSunk(state.enemyShips)) {
@@ -232,13 +272,8 @@ function executePlayerFire(shooter, r, c, reason) {
   }
 
   state.turn = 'enemy';
-  setTimeout(aiTurn, 600);
+  setTimeout(enemyTurn, 600);
   return true;
-}
-
-function handlePlayerFire(r, c) {
-  if (state.gameOver || state.turn !== 'player' || state.mode !== 'manual') return;
-  executePlayerFire('You', r, c, null);
 }
 
 function getAvailableCells(board) {
@@ -282,6 +317,24 @@ function pickRandomCell(board) {
   return cells[Math.floor(Math.random() * cells.length)];
 }
 
+function manhattan(a, b) {
+  return Math.abs(a.r - b.r) + Math.abs(a.c - b.c);
+}
+
+function directionFrom(from, to) {
+  if (to.r < from.r) return 'north';
+  if (to.r > from.r) return 'south';
+  if (to.c < from.c) return 'west';
+  return 'east';
+}
+
+function regionName(r, c) {
+  const v = r < 3 ? 'top' : r < 7 ? 'center' : 'bottom';
+  const h = c < 3 ? 'left' : c < 7 ? 'middle' : 'right';
+  if (v === 'center' && h === 'middle') return 'center';
+  return `${v}-${h}`;
+}
+
 function canPlaceForProbability(board, ship, row, col, horizontal) {
   for (let i = 0; i < ship.size; i++) {
     const r = horizontal ? row : row + i;
@@ -314,22 +367,20 @@ function computeProbabilityHeat(board, ships) {
   return heat;
 }
 
-function computeShipHeat(board, ship) {
-  const heat = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(0));
+function pickBestFromHeat(board, ships) {
+  const heat = computeProbabilityHeat(board, ships);
+  let best = null;
+  let bestScore = -1;
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
-      for (const horizontal of [true, false]) {
-        if (canPlaceForProbability(board, ship, r, c, horizontal)) {
-          for (let i = 0; i < ship.size; i++) {
-            const rr = horizontal ? r : r + i;
-            const cc = horizontal ? c + i : c;
-            heat[rr][cc] += 1;
-          }
-        }
+      if (!isUnknown(board[r][c])) continue;
+      if (heat[r][c] > bestScore) {
+        bestScore = heat[r][c];
+        best = { r, c };
       }
     }
   }
-  return heat;
+  return { best, bestScore };
 }
 
 function updateHeatmap() {
@@ -358,79 +409,101 @@ function updateHeatmap() {
   state.heatMax = max;
 }
 
-function chooseShot() {
+function chooseEnemyShot() {
   const { playerBoard, playerShips, difficulty } = state;
+  const available = getAvailableCells(playerBoard);
+  if (available.length === 0) return null;
+
+  const heat = computeProbabilityHeat(playerBoard, playerShips);
 
   if (difficulty === 'random') {
     const cell = pickRandomCell(playerBoard);
-    return { ...cell, reason: 'random search' };
+    return { ...cell, reason: "no pattern yet, so I'm spreading fire randomly", heatValue: heat[cell.r][cell.c] };
   }
 
+  const unsunkHits = getUnsunkHits(playerBoard);
+
   if (difficulty === 'hunt') {
-    const hits = getUnsunkHits(playerBoard);
-    if (hits.length > 0) {
+    if (unsunkHits.length > 0) {
       const candidates = [];
-      for (const { r, c } of hits) {
-        for (const { r: nr, c: nc } of getAdjacentCells(r, c)) {
-          const s = playerBoard[nr][nc].status;
-          if (s !== STATUS.HIT && s !== STATUS.MISS && s !== STATUS.SUNK) candidates.push({ r: nr, c: nc });
+      for (const hit of unsunkHits) {
+        for (const cell of getAdjacentCells(hit.r, hit.c)) {
+          if (isUnknown(playerBoard[cell.r][cell.c])) candidates.push({ cell, hit });
         }
       }
       if (candidates.length > 0) {
-        const pick = candidates[Math.floor(Math.random() * candidates.length)];
-        return { ...pick, reason: 'hunting around a known hit' };
+        const { cell, hit } = candidates[Math.floor(Math.random() * candidates.length)];
+        const dir = directionFrom(hit, cell);
+        return { ...cell, reason: `working outward from the hit at ${coordLabel(hit.r, hit.c)} toward the ${dir}`, heatValue: heat[cell.r][cell.c] };
       }
     }
     const cell = pickRandomCell(playerBoard);
-    return { ...cell, reason: 'no known targets, choosing random' };
+    return { ...cell, reason: "no wounded ships, so I'm choosing a spread-out random shot", heatValue: heat[cell.r][cell.c] };
   }
 
   if (difficulty === 'probability') {
-    const heat = computeProbabilityHeat(playerBoard, playerShips);
-    let best = null;
-    let bestScore = -1;
-    for (let r = 0; r < BOARD_SIZE; r++) {
-      for (let c = 0; c < BOARD_SIZE; c++) {
-        const s = playerBoard[r][c].status;
-        if (s === STATUS.HIT || s === STATUS.MISS || s === STATUS.SUNK) continue;
-        if (heat[r][c] > bestScore) {
-          bestScore = heat[r][c];
-          best = { r, c };
-        }
+    let best = null, bestScore = -1;
+    for (const cell of available) {
+      if (heat[cell.r][cell.c] > bestScore) {
+        bestScore = heat[cell.r][cell.c];
+        best = cell;
       }
     }
-    if (!best) {
-      const cell = pickRandomCell(playerBoard);
-      return { ...cell, reason: 'fallback random' };
+
+    let reason;
+    if (unsunkHits.length > 0) {
+      const nearest = unsunkHits.reduce((a, b) => (manhattan(a, best) < manhattan(b, best) ? a : b));
+      if (manhattan(nearest, best) <= 2) {
+        reason = `extending the wounded ship at ${coordLabel(nearest.r, nearest.c)} through ${coordLabel(best.r, best.c)}`;
+      } else {
+        reason = `the area around ${coordLabel(best.r, best.c)} has the best fit for the remaining ships, while the hit at ${coordLabel(nearest.r, nearest.c)} is still open`;
+      }
+    } else {
+      reason = `the ${regionName(best.r, best.c)} has the most room for the remaining ships; ${coordLabel(best.r, best.c)} is my best blind shot`;
     }
-    return { ...best, reason: `highest probability cell (score ${bestScore})` };
+    return { ...best, reason, heatValue: bestScore };
   }
 
   const cell = pickRandomCell(playerBoard);
-  return { ...cell, reason: 'default random' };
+  return { ...cell, reason: 'falling back to a random shot', heatValue: heat[cell.r][cell.c] };
 }
 
-function aiTurn() {
+function enemyTurn() {
   if (state.gameOver) return;
+  if (state.autonomousActive && state.abortAutonomous) {
+    finishAutonomous();
+    return;
+  }
 
-  const shot = chooseShot();
+  const shot = chooseEnemyShot();
   if (!shot) return;
 
-  const { r, c, reason } = shot;
+  const { r, c, reason, heatValue } = shot;
   const result = fire(state.playerBoard, state.playerShips, r, c);
+  state.shotCount++;
+  state.history.push({
+    actor: 'enemy',
+    r,
+    c,
+    result: result.hit ? (result.sunk ? 'sunk' : 'hit') : 'miss',
+    shipName: result.ship ? result.ship.name : null,
+    reason,
+    shotNumber: state.shotCount,
+    heatValue
+  });
+
   updateHeatmap();
   render();
 
-  const why = reason ? `, ${reason}` : '';
   if (result.hit && result.sunk) {
-    log(`Enemy fires at ${coordLabel(r, c)} — hit and sunk your ${result.ship.name}${why}!`);
-    updateStatus(`Enemy sank your ${result.ship.name}! Your turn.`);
+    log(`Enemy fires at ${coordLabel(r, c)} — hit and sunk your ${result.ship.name}! (${reason})`);
+    updateStatus(`Enemy sank your ${result.ship.name}!`);
   } else if (result.hit) {
-    log(`Enemy fires at ${coordLabel(r, c)} — hit${why}.`);
-    updateStatus('Enemy hit! Your turn.');
+    log(`Enemy fires at ${coordLabel(r, c)} — hit. (${reason})`);
+    updateStatus('Enemy hit!');
   } else {
-    log(`Enemy fires at ${coordLabel(r, c)} — miss${why}.`);
-    updateStatus('Enemy missed. Your turn.');
+    log(`Enemy fires at ${coordLabel(r, c)} — miss. (${reason})`);
+    updateStatus('Enemy missed.');
   }
 
   if (allSunk(state.playerShips)) {
@@ -439,6 +512,10 @@ function aiTurn() {
   }
 
   state.turn = 'player';
+
+  if (state.autonomousActive && !state.abortAutonomous) {
+    setTimeout(autonomousStep, 600);
+  }
 }
 
 function parseCoordinate(text) {
@@ -468,31 +545,86 @@ function filterAvailable(board, filter) {
 }
 
 function parseQuadrant(text) {
-  if (/top\s*right|upper\s*right/.test(text)) return { name: 'top-right quadrant', filter: (r, c) => r < 5 && c >= 5 };
-  if (/top\s*left|upper\s*left/.test(text)) return { name: 'top-left quadrant', filter: (r, c) => r < 5 && c < 5 };
-  if (/bottom\s*right|lower\s*right/.test(text)) return { name: 'bottom-right quadrant', filter: (r, c) => r >= 5 && c >= 5 };
-  if (/bottom\s*left|lower\s*left/.test(text)) return { name: 'bottom-left quadrant', filter: (r, c) => r >= 5 && c < 5 };
-  if (/\btop\b/.test(text)) return { name: 'top half', filter: (r, c) => r < 5 };
-  if (/\bbottom\b/.test(text)) return { name: 'bottom half', filter: (r, c) => r >= 5 };
-  if (/\bleft\b/.test(text)) return { name: 'left half', filter: (r, c) => c < 5 };
-  if (/\bright\b/.test(text)) return { name: 'right half', filter: (r, c) => c >= 5 };
+  if (/top\s*right|upper\s*right/.test(text)) return { name: 'top-right', filter: (r, c) => r < 5 && c >= 5 };
+  if (/top\s*left|upper\s*left/.test(text)) return { name: 'top-left', filter: (r, c) => r < 5 && c < 5 };
+  if (/bottom\s*right|lower\s*right/.test(text)) return { name: 'bottom-right', filter: (r, c) => r >= 5 && c >= 5 };
+  if (/bottom\s*left|lower\s*left/.test(text)) return { name: 'bottom-left', filter: (r, c) => r >= 5 && c < 5 };
+  if (/\btop\b/.test(text)) return { name: 'top', filter: (r, c) => r < 5 };
+  if (/\bbottom\b/.test(text)) return { name: 'bottom', filter: (r, c) => r >= 5 };
+  if (/\bleft\b/.test(text)) return { name: 'left', filter: (r, c) => c < 5 };
+  if (/\bright\b/.test(text)) return { name: 'right', filter: (r, c) => c >= 5 };
   return null;
 }
 
-function pickBestFromHeat(board, ships) {
-  const heat = computeProbabilityHeat(board, ships);
-  let best = null;
-  let bestScore = -1;
-  for (let r = 0; r < BOARD_SIZE; r++) {
-    for (let c = 0; c < BOARD_SIZE; c++) {
-      if (!isUnknown(board[r][c])) continue;
-      if (heat[r][c] > bestScore) {
-        bestScore = heat[r][c];
-        best = { r, c };
-      }
+function gunnerReason(order, target, isOverride) {
+  const board = state.enemyBoard;
+  const ships = state.enemyShips;
+  const text = order.toLowerCase();
+  const label = coordLabel(target.r, target.c);
+  const overridePrefix = isOverride ? 'using your override at ' : '';
+  const overrideSuffix = isOverride ? ' as you directed' : '';
+
+  if (/finish|wound|wounded|hurt|hurting|sink|sinking|kill|killing/.test(text)) {
+    const hits = getUnsunkHits(board);
+    const hit = hits.find(h => getAdjacentCells(h.r, h.c).some(c => c.r === target.r && c.c === target.c));
+    if (hit) {
+      if (isOverride) return `${overridePrefix}${label} to finish the ship wounded at ${coordLabel(hit.r, hit.c)}`;
+      return `the ship hit at ${coordLabel(hit.r, hit.c)} is still open; ${label} should finish it`;
     }
+    if (hits.length > 0) {
+      if (isOverride) return `${overridePrefix}${label} to keep after the wounded ship${overrideSuffix}`;
+      return `no open cells next to the wounded ship, so ${label} is the best next probe`;
+    }
+    if (isOverride) return `${overridePrefix}${label} to search for a wounded ship${overrideSuffix}`;
+    return `${label} is the best place to look for an unfinished ship`;
   }
-  return { best, bestScore };
+
+  const shipMatch = text.match(/\b(carrier|battleship|cruiser|submarine|destroyer)\b/);
+  if (shipMatch) {
+    const ship = findShip(ships, shipMatch[1]);
+    if (ship && ship.sunk) {
+      if (isOverride) return `${overridePrefix}${label}; the ${ship.name} is already sunk, so this is your choice${overrideSuffix}`;
+      return `the ${ship.name} is already sunk; ${label} is the best remaining shot`;
+    }
+    if (isOverride) return `${overridePrefix}${label} still fits the ${ship.name}'s possible layout${overrideSuffix}`;
+    return `the ${ship.name} needs ${ship.size} straight cells; ${label} is the best surviving fit`;
+  }
+
+  const coord = parseCoordinate(text);
+  if (coord && /around|near|close|adjacent|next to/.test(text)) {
+    if (isOverride) return `${overridePrefix}${label} while searching around ${coordLabel(coord.r, coord.c)}${overrideSuffix}`;
+    return `searching around ${coordLabel(coord.r, coord.c)}; ${label} is the best open neighbor`;
+  }
+
+  const quad = parseQuadrant(text);
+  if (quad && quad.filter(target.r, target.c)) {
+    if (isOverride) return `${overridePrefix}${label} in the ${quad.name} quadrant${overrideSuffix}`;
+    return `working the ${quad.name} quarter; ${label} is the best untested cell there`;
+  }
+
+  if (/center|middle/.test(text)) {
+    if (isOverride) return `${overridePrefix}${label} in the center${overrideSuffix}`;
+    return `the center still has the most room; ${label} is the best central probe`;
+  }
+
+  if (/random|anywhere|whatever/.test(text)) {
+    if (isOverride) return `${overridePrefix}${label} at random${overrideSuffix}`;
+    return `spreading random fire to ${label}`;
+  }
+
+  const heat = computeProbabilityHeat(board, ships);
+  const max = Math.max(1, ...heat.flat());
+  const score = heat[target.r][target.c];
+  if (score === max && max > 0) {
+    if (isOverride) return `${overridePrefix}${label} — it matches the highest-probability cell I had in mind${overrideSuffix}`;
+    return `the area around ${label} has the best chance of hiding a remaining ship`;
+  }
+  if (score > 0) {
+    if (isOverride) return `${overridePrefix}${label}; the density there is still solid${overrideSuffix}`;
+    return `the density around ${label} is still promising`;
+  }
+  if (isOverride) return `${overridePrefix}${label} as your choice${overrideSuffix}`;
+  return `no strong signal, so I'm trying ${label}`;
 }
 
 function gunnerPick(order) {
@@ -500,41 +632,37 @@ function gunnerPick(order) {
   const ships = state.enemyShips;
   const text = order.toLowerCase();
 
-  // Finish off wounded ships
   if (/finish|wound|wounded|hurt|hurting|sink|sinking|kill|killing/.test(text)) {
     const hits = getUnsunkHits(board);
     if (hits.length > 0) {
       const candidates = [];
-      for (const { r, c } of hits) {
-        for (const cell of getAdjacentCells(r, c)) {
-          if (isUnknown(board[cell.r][cell.c])) candidates.push(cell);
+      for (const hit of hits) {
+        for (const cell of getAdjacentCells(hit.r, hit.c)) {
+          if (isUnknown(board[cell.r][cell.c])) candidates.push({ cell, hit });
         }
       }
       if (candidates.length > 0) {
-        const pick = candidates[Math.floor(Math.random() * candidates.length)];
-        return { ...pick, reason: 'finishing off a wounded ship' };
+        const { cell, hit } = candidates[Math.floor(Math.random() * candidates.length)];
+        return { ...cell, reason: `the ship hit at ${coordLabel(hit.r, hit.c)} is still open; ${coordLabel(cell.r, cell.c)} should finish it` };
       }
     }
-    const { best, bestScore } = pickBestFromHeat(board, ships);
-    if (best) return { ...best, reason: `no wounded targets, highest-probability cell (score ${bestScore})` };
+    const { best } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `no open cells next to a wounded ship, so ${coordLabel(best.r, best.c)} is the best fallback` };
     const cell = pickRandomCell(board);
-    return { ...cell, reason: 'no wounded targets, firing randomly' };
+    return { ...cell, reason: `no wounded ships and no strong signal; firing at ${coordLabel(cell.r, cell.c)} randomly` };
   }
 
-  // Hunt a specific ship
   const shipMatch = text.match(/\b(carrier|battleship|cruiser|submarine|destroyer)\b/);
   if (shipMatch) {
-    const shipId = shipMatch[1];
-    const ship = findShip(ships, shipId);
+    const ship = findShip(ships, shipMatch[1]);
     if (ship.sunk) {
-      const { best, bestScore } = pickBestFromHeat(board, ships);
-      if (best) return { ...best, reason: `${ship.name} already sunk, using next-best probability (score ${bestScore})` };
+      const { best } = pickBestFromHeat(board, ships);
+      if (best) return { ...best, reason: `the ${ship.name} is already sunk; ${coordLabel(best.r, best.c)} is the best fallback` };
       const cell = pickRandomCell(board);
-      return { ...cell, reason: `${ship.name} already sunk, firing randomly` };
+      return { ...cell, reason: `the ${ship.name} is sunk; firing randomly at ${coordLabel(cell.r, cell.c)}` };
     }
     const heat = computeShipHeat(board, ship);
-    let best = null;
-    let bestScore = -1;
+    let best = null, bestScore = -1;
     for (let r = 0; r < BOARD_SIZE; r++) {
       for (let c = 0; c < BOARD_SIZE; c++) {
         if (!isUnknown(board[r][c])) continue;
@@ -544,67 +672,100 @@ function gunnerPick(order) {
         }
       }
     }
-    if (best) return { ...best, reason: `hunting the ${ship.name}` };
+    if (best) return { ...best, reason: `the ${ship.name} needs ${ship.size} straight cells; ${coordLabel(best.r, best.c)} is the best surviving fit` };
     const cell = pickRandomCell(board);
-    return { ...cell, reason: `could not place the ${ship.name}, firing randomly` };
+    return { ...cell, reason: `no place left for the ${ship.name}; firing randomly at ${coordLabel(cell.r, cell.c)}` };
   }
 
-  // Around a coordinate
   const coord = parseCoordinate(text);
   if (coord && /around|near|close|adjacent|next to/.test(text)) {
     const candidates = getAdjacentCells(coord.r, coord.c).filter(cell => isUnknown(board[cell.r][cell.c]));
     if (candidates.length > 0) {
       const pick = candidates[Math.floor(Math.random() * candidates.length)];
-      return { ...pick, reason: `searching around ${coordLabel(coord.r, coord.c)}` };
+      return { ...pick, reason: `searching around ${coordLabel(coord.r, coord.c)}; ${coordLabel(pick.r, pick.c)} is the best open neighbor` };
     }
-    const { best, bestScore } = pickBestFromHeat(board, ships);
-    if (best) return { ...best, reason: `no open cells near ${coordLabel(coord.r, coord.c)}, using probability (score ${bestScore})` };
+    const { best } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `no open cells next to ${coordLabel(coord.r, coord.c)}; ${coordLabel(best.r, best.c)} is the best fallback` };
     const cell = pickRandomCell(board);
-    return { ...cell, reason: `no open cells near ${coordLabel(coord.r, coord.c)}, firing randomly` };
+    return { ...cell, reason: `no open neighbors near ${coordLabel(coord.r, coord.c)}` };
   }
 
-  // Quadrant / half
   const quad = parseQuadrant(text);
   if (quad) {
     const candidates = filterAvailable(board, quad.filter);
     if (candidates.length > 0) {
+      const { best } = pickBestInFilter(board, ships, quad.filter);
+      if (best) return { ...best, reason: `working the ${quad.name} quarter; ${coordLabel(best.r, best.c)} is the best untested cell there` };
       const pick = candidates[Math.floor(Math.random() * candidates.length)];
-      return { ...pick, reason: `working the ${quad.name}` };
+      return { ...pick, reason: `working the ${quad.name} quarter; ${coordLabel(pick.r, pick.c)} is open` };
     }
-    const { best, bestScore } = pickBestFromHeat(board, ships);
-    if (best) return { ...best, reason: `${quad.name} is empty, using probability (score ${bestScore})` };
+    const { best } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `the ${quad.name} quarter is exhausted; ${coordLabel(best.r, best.c)} is the best fallback` };
     const cell = pickRandomCell(board);
-    return { ...cell, reason: `${quad.name} is empty, firing randomly` };
+    return { ...cell, reason: `${quad.name} quarter is empty; firing randomly` };
   }
 
-  // Center
   if (/center|middle/.test(text)) {
     const candidates = filterAvailable(board, (r, c) => r >= 3 && r <= 6 && c >= 3 && c <= 6);
     if (candidates.length > 0) {
+      const { best } = pickBestInFilter(board, ships, (r, c) => r >= 3 && r <= 6 && c >= 3 && c <= 6);
+      if (best) return { ...best, reason: `the center still has the most room; ${coordLabel(best.r, best.c)} is the best central probe` };
       const pick = candidates[Math.floor(Math.random() * candidates.length)];
-      return { ...pick, reason: 'working the center' };
+      return { ...pick, reason: `probing the center at ${coordLabel(pick.r, pick.c)}` };
     }
-    const { best, bestScore } = pickBestFromHeat(board, ships);
-    if (best) return { ...best, reason: `center is empty, using probability (score ${bestScore})` };
+    const { best } = pickBestFromHeat(board, ships);
+    if (best) return { ...best, reason: `the center is exhausted; ${coordLabel(best.r, best.c)} is the best fallback` };
     const cell = pickRandomCell(board);
-    return { ...cell, reason: 'center is empty, firing randomly' };
+    return { ...cell, reason: 'center is empty; firing randomly' };
   }
 
-  // Random / anywhere
-  if (/random|anywhere|whatever|surprise/.test(text)) {
+  if (/random|anywhere|whatever/.test(text)) {
     const cell = pickRandomCell(board);
-    return { ...cell, reason: 'firing at random' };
+    return { ...cell, reason: `spreading random fire to ${coordLabel(cell.r, cell.c)}` };
   }
 
-  // Default: highest probability
   const { best, bestScore } = pickBestFromHeat(board, ships);
-  if (best) return { ...best, reason: `highest-probability cell (score ${bestScore})` };
+  if (best) return { ...best, reason: `the area around ${coordLabel(best.r, best.c)} has the best chance of hiding a remaining ship` };
   const cell = pickRandomCell(board);
-  return { ...cell, reason: 'falling back to random' };
+  return { ...cell, reason: `no strong signal; firing at ${coordLabel(cell.r, cell.c)}` };
 }
 
-function handleDelegatedFire() {
-  if (!state || state.gameOver || state.turn !== 'player' || state.mode !== 'delegated') return;
+function computeShipHeat(board, ship) {
+  const heat = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(0));
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      for (const horizontal of [true, false]) {
+        if (canPlaceForProbability(board, ship, r, c, horizontal)) {
+          for (let i = 0; i < ship.size; i++) {
+            const rr = horizontal ? r : r + i;
+            const cc = horizontal ? c + i : c;
+            heat[rr][cc] += 1;
+          }
+        }
+      }
+    }
+  }
+  return heat;
+}
+
+function pickBestInFilter(board, ships, filter) {
+  const heat = computeProbabilityHeat(board, ships);
+  let best = null, bestScore = -1;
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (!isUnknown(board[r][c])) continue;
+      if (!filter(r, c)) continue;
+      if (heat[r][c] > bestScore) {
+        bestScore = heat[r][c];
+        best = { r, c };
+      }
+    }
+  }
+  return { best, bestScore };
+}
+
+function planAdvised() {
+  if (state.gameOver || state.turn !== 'player' || state.autonomy !== 'advised') return;
   const order = orderInput.value.trim();
   if (!order) {
     updateStatus('Type an order for the gunner first.');
@@ -612,12 +773,96 @@ function handleDelegatedFire() {
   }
   const pick = gunnerPick(order);
   if (!pick) {
-    updateStatus('Gunner could not interpret that order.');
+    updateStatus('Gunner could not find a target.');
     return;
   }
-  gunnerResponse.textContent = `Aye aye, ${pick.reason}. Firing at ${coordLabel(pick.r, pick.c)}.`;
-  orderInput.value = '';
-  executePlayerFire('Gunner', pick.r, pick.c, pick.reason);
+  state.proposal = pick;
+  proposalEl.textContent = `Gunner proposes firing at ${coordLabel(pick.r, pick.c)}. “${pick.reason}” Click another cell to override, or Fire to approve.`;
+  approveBtn.style.display = 'inline-block';
+  updateStatus('Proposal ready. Approve or override.');
+}
+
+function startAutonomous() {
+  if (state.gameOver || state.turn !== 'player' || state.autonomy !== 'autonomous') return;
+  const order = orderInput.value.trim();
+  if (!order) {
+    updateStatus('Type an order for the gunner first.');
+    return;
+  }
+  state.autonomousActive = true;
+  state.abortAutonomous = false;
+  state.autonomousOrder = order;
+  updateAutonomyUI();
+  log(`Gunner: “Engaging on order: ${order}”`);
+  autonomousStep();
+}
+
+function autonomousStep() {
+  if (state.gameOver || state.abortAutonomous || !state.autonomousActive) {
+    finishAutonomous();
+    return;
+  }
+  const pick = gunnerPick(state.autonomousOrder);
+  if (!pick) {
+    log('Gunner: “Order complete. No valid targets remain.”');
+    updateStatus('Gunner reports the order is complete.');
+    finishAutonomous();
+    return;
+  }
+  fireAtEnemy('Gunner', pick.r, pick.c, pick.reason);
+}
+
+function finishAutonomous() {
+  state.autonomousActive = false;
+  state.autonomousOrder = null;
+  state.abortAutonomous = false;
+  updateAutonomyUI();
+}
+
+function updateAutonomyUI() {
+  autonomyTabs.forEach(btn => {
+    const active = btn.dataset.autonomy === state.autonomy;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active);
+  });
+
+  if (state.autonomy === 'manual') {
+    commandPanel.style.display = 'none';
+    approveBtn.style.display = 'none';
+    abortBtn.style.display = 'none';
+    proposalEl.textContent = '';
+  } else if (state.autonomy === 'advised') {
+    commandPanel.style.display = 'flex';
+    actionBtn.textContent = 'Plan';
+    abortBtn.style.display = 'none';
+    if (!state.proposal) approveBtn.style.display = 'none';
+  } else {
+    commandPanel.style.display = 'flex';
+    actionBtn.textContent = state.autonomousActive ? 'Engaged' : 'Engage';
+    actionBtn.disabled = state.autonomousActive;
+    abortBtn.style.display = state.autonomousActive ? 'inline-block' : 'none';
+    approveBtn.style.display = 'none';
+    proposalEl.textContent = '';
+  }
+
+  if (state.gameOver) {
+    actionBtn.disabled = true;
+    approveBtn.disabled = true;
+    abortBtn.disabled = true;
+  } else {
+    actionBtn.disabled = false;
+    approveBtn.disabled = false;
+    abortBtn.disabled = false;
+  }
+}
+
+function updateProposalWithOverride(r, c) {
+  if (!state.proposal) return;
+  const order = orderInput.value.trim() || state.autonomousOrder || '';
+  const reason = gunnerReason(order, { r, c }, true);
+  state.proposal = { r, c, reason };
+  proposalEl.textContent = `Override accepted: firing at ${coordLabel(r, c)}. “${reason}” Click Fire to confirm or another cell to change.`;
+  approveBtn.style.display = 'inline-block';
 }
 
 enemyBoardEl.addEventListener('click', e => {
@@ -625,10 +870,32 @@ enemyBoardEl.addEventListener('click', e => {
   if (!cell) return;
   const r = parseInt(cell.dataset.r, 10);
   const c = parseInt(cell.dataset.c, 10);
-  handlePlayerFire(r, c);
+
+  if (state.gameOver || state.turn !== 'player') return;
+
+  if (state.autonomy === 'manual') {
+    fireAtEnemy('You', r, c, null);
+  } else if (state.autonomy === 'advised') {
+    if (!state.proposal) {
+      updateStatus('Plan a shot first by typing an order and clicking Plan.');
+      return;
+    }
+    updateProposalWithOverride(r, c);
+  }
 });
 
 document.getElementById('new-game').addEventListener('click', initGame);
+
+autonomyTabs.forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (state.autonomousActive) return;
+    state.autonomy = btn.dataset.autonomy;
+    state.proposal = null;
+    proposalEl.textContent = '';
+    updateAutonomyUI();
+    updateStatusForAutonomy();
+  });
+});
 
 difficultySelect.addEventListener('change', e => {
   if (!state) return;
@@ -637,23 +904,120 @@ difficultySelect.addEventListener('change', e => {
   render();
 });
 
-modeToggleBtn.addEventListener('click', () => {
-  if (!state) return;
-  state.mode = state.mode === 'manual' ? 'delegated' : 'manual';
-  modeToggleBtn.textContent = `Mode: ${state.mode === 'manual' ? 'Manual' : 'Delegated'}`;
-  delegatedControls.style.display = state.mode === 'delegated' ? 'flex' : 'none';
-  gunnerResponse.textContent = '';
-  if (state.mode === 'delegated') {
-    updateStatus('Delegated mode. Type an order for the gunner and press Fire.');
-    orderInput.focus();
-  } else {
-    updateStatus('Manual mode. Click a cell on the enemy board to fire.');
+actionBtn.addEventListener('click', () => {
+  if (state.autonomy === 'advised') planAdvised();
+  else if (state.autonomy === 'autonomous') startAutonomous();
+});
+
+approveBtn.addEventListener('click', () => {
+  if (!state.proposal) return;
+  fireAtEnemy('Gunner', state.proposal.r, state.proposal.c, state.proposal.reason);
+});
+
+abortBtn.addEventListener('click', () => {
+  state.abortAutonomous = true;
+  updateStatus('Standing down...');
+});
+
+orderInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (state.autonomy === 'advised') planAdvised();
+    else if (state.autonomy === 'autonomous') startAutonomous();
   }
 });
 
-orderFireBtn.addEventListener('click', handleDelegatedFire);
-orderInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') handleDelegatedFire();
+document.getElementById('report-close').addEventListener('click', () => {
+  reportEl.style.display = 'none';
 });
+
+function showReport(winner) {
+  const playerShots = state.history.filter(h => h.actor === 'player');
+  const enemyShots = state.history.filter(h => h.actor === 'enemy');
+  const playerHits = playerShots.filter(h => h.result === 'hit' || h.result === 'sunk').length;
+  const enemyHits = enemyShots.filter(h => h.result === 'hit' || h.result === 'sunk').length;
+  const playerSunk = state.enemyShips.filter(s => s.sunk).length;
+  const enemySunk = state.playerShips.filter(s => s.sunk).length;
+
+  const turnPairs = Math.floor(state.shotCount / 2);
+
+  const enemyMisses = enemyShots.length - enemyHits;
+  const wastedShots = enemyShots.filter(h => h.result === 'miss' && h.heatValue === 0).length;
+  const drySpell = longestDrySpell(enemyShots);
+
+  const insight = buildInsight(enemyShots, state.playerShips, wastedShots, drySpell);
+
+  reportBody.innerHTML = `
+    <p class="report-winner">${winner === 'Player' ? 'You won' : 'The enemy won'} in ${turnPairs} turn${turnPairs === 1 ? '' : 's'}.</p>
+    <div class="report-columns">
+      <div>
+        <h3>Your side</h3>
+        <p>Shots: ${playerShots.length}</p>
+        <p>Hits: ${playerHits}</p>
+        <p>Misses: ${playerShots.length - playerHits}</p>
+        <p>Enemy ships sunk: ${playerSunk}/5</p>
+      </div>
+      <div>
+        <h3>Enemy AI</h3>
+        <p>Shots: ${enemyShots.length}</p>
+        <p>Hits: ${enemyHits}</p>
+        <p>Misses: ${enemyMisses}</p>
+        <p>Your ships sunk: ${enemySunk}/5</p>
+      </div>
+    </div>
+    <p>${insight}</p>
+  `;
+  reportEl.style.display = 'flex';
+}
+
+function longestDrySpell(shots) {
+  let max = 0, current = 0;
+  for (const s of shots) {
+    if (s.result === 'miss') current++;
+    else {
+      if (current > max) max = current;
+      current = 0;
+    }
+  }
+  if (current > max) max = current;
+  return max;
+}
+
+function buildInsight(enemyShots, playerShips, wasted, drySpell) {
+  const parts = [];
+
+  if (enemyShots.length === 0) return 'No shots were fired.';
+
+  const firstHit = enemyShots.find(s => s.result === 'hit' || s.result === 'sunk');
+  if (firstHit) {
+    const firstShip = firstHit.shipName ? `your ${firstHit.shipName}` : 'one of your ships';
+    parts.push(`It first found ${firstShip} on shot ${firstHit.shotNumber}.`);
+  } else {
+    parts.push('It never found a hit.');
+  }
+
+  const shipEfforts = playerShips.map(ship => {
+    const first = enemyShots.find(s => (s.result === 'hit' || s.result === 'sunk') && s.shipName === ship.name);
+    const sunk = enemyShots.find(s => s.result === 'sunk' && s.shipName === ship.name);
+    return { ship, first, sunk };
+  }).filter(s => s.first && s.sunk);
+
+  if (shipEfforts.length > 0) {
+    const worst = shipEfforts.reduce((a, b) => {
+      const aLen = enemyShots.indexOf(a.sunk) - enemyShots.indexOf(a.first);
+      const bLen = enemyShots.indexOf(b.sunk) - enemyShots.indexOf(b.first);
+      return aLen > bLen ? a : b;
+    });
+    const shotsToSink = enemyShots.indexOf(worst.sunk) - enemyShots.indexOf(worst.first) + 1;
+    parts.push(`Its longest hunt was the ${worst.ship.name}, taking ${shotsToSink} shots from first hit to sink.`);
+  }
+
+  if (wasted > 0) parts.push(`It wasted ${wasted} shot${wasted === 1 ? '' : 's'} on cells that couldn't fit any remaining ship.`);
+  if (drySpell > 4) parts.push(`Its longest dry spell was ${drySpell} misses.`);
+
+  const accuracy = Math.round((enemyShots.filter(s => s.result !== 'miss').length / enemyShots.length) * 100);
+  parts.push(`Overall accuracy: ${accuracy}%.`);
+
+  return parts.join(' ');
+}
 
 initGame();

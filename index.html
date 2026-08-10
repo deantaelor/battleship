@@ -3,30 +3,51 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Battleship AI</title>
+  <title>Battleship</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <header class="site-header">
+    <h1>Battleship</h1>
+    <p class="subtitle">manual, advised, and autonomous fire control</p>
+  </header>
+
   <main>
-    <h1>Battleship vs AI</h1>
-    <div class="controls">
-      <button id="new-game">New Game</button>
-      <label for="difficulty">Enemy AI:</label>
-      <select id="difficulty">
-        <option value="random">Random</option>
-        <option value="hunt">Hunt & Target</option>
-        <option value="probability">Probability Density</option>
-      </select>
-      <button id="mode-toggle">Mode: Manual</button>
+    <div class="top-bar">
+      <button id="new-game" class="pill-btn">New Game</button>
+
+      <div class="autonomy-tabs" role="tablist" aria-label="Autonomy level">
+        <button class="pill-btn active" data-autonomy="manual" aria-pressed="true">Manual</button>
+        <button class="pill-btn" data-autonomy="advised" aria-pressed="false">Advised</button>
+        <button class="pill-btn" data-autonomy="autonomous" aria-pressed="false">Autonomous</button>
+      </div>
+
+      <div class="difficulty-wrap">
+        <label for="difficulty-select">Enemy AI</label>
+        <div class="select-wrap">
+          <select id="difficulty-select">
+            <option value="random">Random</option>
+            <option value="hunt">Hunt & Target</option>
+            <option value="probability">Probability Density</option>
+          </select>
+        </div>
+      </div>
     </div>
-    <div id="delegated-controls" class="delegated-controls" style="display: none;">
-      <label for="order-input">Order to gunner:</label>
-      <input id="order-input" type="text" placeholder="e.g. finish off whatever we wounded" autocomplete="off">
-      <button id="order-fire">Fire</button>
-      <div id="gunner-response" class="gunner-response"></div>
+
+    <div id="command-panel" class="command-panel">
+      <label for="order-input">Order to gunner</label>
+      <input id="order-input" type="text" placeholder="e.g. finish whatever we wounded" autocomplete="off">
+      <button id="action-btn" class="pill-btn primary">Plan</button>
+      <button id="approve-btn" class="pill-btn primary" style="display: none;">Fire as proposed</button>
+      <button id="abort-btn" class="pill-btn" style="display: none;">Stand down</button>
+      <div id="proposal" class="proposal"></div>
     </div>
-    <p class="instructions">Manual mode: click a cell on the enemy board. Delegated mode: type an order for the gunner, e.g. “hunt the carrier”, “work the top right quadrant”, or “finish off whatever we wounded”, then press Fire. The enemy AI uses the selected difficulty; its heatmap and reasoning appear on your board.</p>
+
     <div class="status" id="status">Click a cell on the enemy board to fire.</div>
+
     <div class="boards">
       <div class="board-wrap">
         <h2>Your Fleet</h2>
@@ -37,11 +58,21 @@
         <div id="enemy-board" class="board"></div>
       </div>
     </div>
+
     <section class="logs">
-      <h2>Battle Log</h2>
+      <h2>Ship’s Log</h2>
       <ul id="log-list"></ul>
     </section>
   </main>
+
+  <div id="report" class="report-overlay" style="display: none;">
+    <div class="report-card">
+      <h2>After-action report</h2>
+      <div id="report-body"></div>
+      <button id="report-close" class="pill-btn primary">Close</button>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>

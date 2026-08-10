@@ -27,3 +27,13 @@ Keep a running list of issues we hit while building, plus how we fixed them.
 - **Fix**: Built a rule-based “gunner” agent in the browser that parses keywords like carrier, top-right, around A5, finish off, etc. and explains its choice. The rule parser can be swapped for an LLM call later by replacing `gunnerPick()`.
 - **Date**: 2026-08-10
 
+## 6. After-action report over-counted hunt length
+- **Symptom**: The report reported a ship hunt taking e.g. 49 shots from first hit to sink, but the total game only had 47 enemy turns.
+- **Fix**: Changed the report to measure hunt length by the index of the ship's first and final enemy shots in the enemy-only history, so it counts only enemy turns spent on that ship.
+- **Date**: 2026-08-10
+
+## 7. “Wasted shots” count was inflated for random/hunt AI
+- **Symptom**: The report treated every enemy miss in random or hunt mode as wasted because the heat value was hard-coded to 0.
+- **Fix**: Made `chooseEnemyShot()` compute the probability heat for all difficulties and store the chosen cell’s heat value with each shot, so misses on plausible cells are not counted as wasted.
+- **Date**: 2026-08-10
+
