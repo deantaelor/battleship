@@ -107,6 +107,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 0.7rem;
   font-weight: 700;
   user-select: none;
+  position: relative;
+}
+
+.cell.heat::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: var(--heat-color);
+  opacity: var(--heat-opacity);
+  border-radius: 2px;
+  pointer-events: none;
 }
 
 #enemy-board .cell { cursor: crosshair; }
@@ -117,9 +128,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .cell.miss { background: var(--miss); color: #142f4d; }
 .cell.sunk { background: var(--sunk); }
 
-.cell.heat {
-  opacity: 0.85;
-}
+
 
 .logs {
   margin-top: 1.25rem;

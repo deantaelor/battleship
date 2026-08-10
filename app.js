@@ -95,21 +95,24 @@ function initGame() {
     turn: 'player',
     gameOver: false,
     difficulty: difficultySelect.value,
-    mode: 'manual'
+    mode: 'manual',
+    heat: null,
+    heatMax: 0
   };
 
   logListEl.innerHTML = '';
   log('New game started. Click the enemy board to fire.');
   updateStatus('Your turn. Click a cell on the enemy board to fire.');
+  updateHeatmap();
   render();
 }
 
 function render() {
-  renderBoard(playerBoardEl, state.playerBoard, false);
-  renderBoard(enemyBoardEl, state.enemyBoard, true);
+  renderBoard(playerBoardEl, state.playerBoard, false, state.heat, state.heatMax);
+  renderBoard(enemyBoardEl, state.enemyBoard, true, null, 0);
 }
 
-function renderBoard(element, board, hideShips) {
+function renderBoard(element, board, hideShips, heat, heatMax) {
   element.innerHTML = '';
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
@@ -118,10 +121,23 @@ function renderBoard(element, board, hideShips) {
       cell.dataset.r = r;
       cell.dataset.c = c;
       const cellState = board[r][c].status;
+
       if (cellState === STATUS.HIT) cell.classList.add('hit');
       else if (cellState === STATUS.MISS) cell.classList.add('miss');
       else if (cellState === STATUS.SUNK) cell.classList.add('sunk');
       else if (cellState === STATUS.SHIP && !hideShips) cell.classList.add('ship');
+
+      if (heat && (cellState === STATUS.EMPTY || cellState === STATUS.SHIP)) {
+        const h = heat[r][c];
+        const max = heatMax || 1;
+        const factor = h / max;
+        const hue = 220 - factor * 220;
+        const opacity = 0.25 + factor * 0.55;
+        cell.classList.add('heat');
+        cell.style.setProperty('--heat-color', `hsl(${hue}, 85%, 55%)`);
+        cell.style.setProperty('--heat-opacity', opacity.toFixed(2));
+      }
+
       element.appendChild(cell);
     }
   }
@@ -186,8 +202,6 @@ function handlePlayerFire(r, c) {
     return;
   }
 
-  render();
-
   if (result.hit && result.sunk) {
     log(`You fire at ${coordLabel(r, c)} — hit and sunk the ${result.ship.name}!`);
     updateStatus(`You sank the ${result.ship.name}! Enemy turn...`);
@@ -198,6 +212,8 @@ function handlePlayerFire(r, c) {
     log(`You fire at ${coordLabel(r, c)} — miss.`);
     updateStatus('Miss. Enemy turn...');
   }
+
+  render();
 
   if (allSunk(state.enemyShips)) {
     endGame('Player');
@@ -219,30 +235,163 @@ function getAvailableCells(board) {
   return cells;
 }
 
-function pickRandomShot() {
-  const cells = getAvailableCells(state.playerBoard);
+function getUnsunkHits(board) {
+  const hits = [];
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (board[r][c].status === STATUS.HIT) hits.push({ r, c });
+    }
+  }
+  return hits;
+}
+
+function getAdjacentCells(r, c) {
+  const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  const result = [];
+  for (const [dr, dc] of dirs) {
+    const nr = r + dr, nc = c + dc;
+    if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) result.push({ r: nr, c: nc });
+  }
+  return result;
+}
+
+function pickRandomCell(board) {
+  const cells = getAvailableCells(board);
   if (cells.length === 0) return null;
   return cells[Math.floor(Math.random() * cells.length)];
+}
+
+function canPlaceForProbability(board, ship, row, col, horizontal) {
+  for (let i = 0; i < ship.size; i++) {
+    const r = horizontal ? row : row + i;
+    const c = horizontal ? col + i : col;
+    if (r >= BOARD_SIZE || c >= BOARD_SIZE) return false;
+    const s = board[r][c].status;
+    if (s === STATUS.MISS || s === STATUS.SUNK) return false;
+  }
+  return true;
+}
+
+function computeProbabilityHeat(board, ships) {
+  const heat = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(0));
+  const remaining = ships.filter(s => !s.sunk);
+  for (const ship of remaining) {
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        for (const horizontal of [true, false]) {
+          if (canPlaceForProbability(board, ship, r, c, horizontal)) {
+            for (let i = 0; i < ship.size; i++) {
+              const rr = horizontal ? r : r + i;
+              const cc = horizontal ? c + i : c;
+              heat[rr][cc] += 1;
+            }
+          }
+        }
+      }
+    }
+  }
+  return heat;
+}
+
+function updateHeatmap() {
+  if (!state) return;
+  const { playerBoard, playerShips, difficulty } = state;
+  let heat = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(0));
+  let max = 1;
+
+  if (difficulty === 'hunt') {
+    const hits = getUnsunkHits(playerBoard);
+    for (const { r, c } of hits) {
+      for (const { r: nr, c: nc } of getAdjacentCells(r, c)) {
+        const s = playerBoard[nr][nc].status;
+        if (s !== STATUS.HIT && s !== STATUS.MISS && s !== STATUS.SUNK) heat[nr][nc] += 1;
+      }
+    }
+    max = Math.max(1, ...heat.flat());
+  } else if (difficulty === 'probability') {
+    heat = computeProbabilityHeat(playerBoard, playerShips);
+    max = Math.max(1, ...heat.flat());
+  } else {
+    // Random: uniform faint heat
+    max = 1;
+  }
+
+  state.heat = heat;
+  state.heatMax = max;
+}
+
+function chooseShot() {
+  const { playerBoard, playerShips, difficulty } = state;
+
+  if (difficulty === 'random') {
+    const cell = pickRandomCell(playerBoard);
+    return { ...cell, reason: 'random search' };
+  }
+
+  if (difficulty === 'hunt') {
+    const hits = getUnsunkHits(playerBoard);
+    if (hits.length > 0) {
+      const candidates = [];
+      for (const { r, c } of hits) {
+        for (const { r: nr, c: nc } of getAdjacentCells(r, c)) {
+          const s = playerBoard[nr][nc].status;
+          if (s !== STATUS.HIT && s !== STATUS.MISS && s !== STATUS.SUNK) candidates.push({ r: nr, c: nc });
+        }
+      }
+      if (candidates.length > 0) {
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        return { ...pick, reason: 'hunting around a known hit' };
+      }
+    }
+    const cell = pickRandomCell(playerBoard);
+    return { ...cell, reason: 'no known targets, choosing random' };
+  }
+
+  if (difficulty === 'probability') {
+    const heat = computeProbabilityHeat(playerBoard, playerShips);
+    let best = null;
+    let bestScore = -1;
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        const s = playerBoard[r][c].status;
+        if (s === STATUS.HIT || s === STATUS.MISS || s === STATUS.SUNK) continue;
+        if (heat[r][c] > bestScore) {
+          bestScore = heat[r][c];
+          best = { r, c };
+        }
+      }
+    }
+    if (!best) {
+      const cell = pickRandomCell(playerBoard);
+      return { ...cell, reason: 'fallback random' };
+    }
+    return { ...best, reason: `highest probability cell (score ${bestScore})` };
+  }
+
+  const cell = pickRandomCell(playerBoard);
+  return { ...cell, reason: 'default random' };
 }
 
 function aiTurn() {
   if (state.gameOver) return;
 
-  const shot = pickRandomShot();
+  const shot = chooseShot();
   if (!shot) return;
 
-  const { r, c } = shot;
+  const { r, c, reason } = shot;
   const result = fire(state.playerBoard, state.playerShips, r, c);
+  updateHeatmap();
   render();
 
+  const why = reason ? `, ${reason}` : '';
   if (result.hit && result.sunk) {
-    log(`Enemy fires at ${coordLabel(r, c)} — hit and sunk your ${result.ship.name}!`);
+    log(`Enemy fires at ${coordLabel(r, c)} — hit and sunk your ${result.ship.name}${why}!`);
     updateStatus(`Enemy sank your ${result.ship.name}! Your turn.`);
   } else if (result.hit) {
-    log(`Enemy fires at ${coordLabel(r, c)} — hit.`);
+    log(`Enemy fires at ${coordLabel(r, c)} — hit${why}.`);
     updateStatus('Enemy hit! Your turn.');
   } else {
-    log(`Enemy fires at ${coordLabel(r, c)} — miss.`);
+    log(`Enemy fires at ${coordLabel(r, c)} — miss${why}.`);
     updateStatus('Enemy missed. Your turn.');
   }
 
@@ -265,7 +414,10 @@ enemyBoardEl.addEventListener('click', e => {
 document.getElementById('new-game').addEventListener('click', initGame);
 
 difficultySelect.addEventListener('change', e => {
-  if (state) state.difficulty = e.target.value;
+  if (!state) return;
+  state.difficulty = e.target.value;
+  updateHeatmap();
+  render();
 });
 
 modeToggleBtn.addEventListener('click', () => {
