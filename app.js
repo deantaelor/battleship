@@ -16,6 +16,7 @@ const STATUS = {
 };
 
 let state = null;
+let lastReplay = null;
 
 const playerBoardEl = document.getElementById('player-board');
 const enemyBoardEl = document.getElementById('enemy-board');
@@ -40,6 +41,14 @@ function createEmptyBoard() {
 
 function cloneShips() {
   return SHIPS.map(s => ({ ...s, hits: 0, sunk: false, cells: [] }));
+}
+
+function deepCloneShips(ships) {
+  return ships.map(s => ({ ...s, cells: s.cells.map(c => ({ ...c })) }));
+}
+
+function snapshotShips(ships) {
+  return ships.map(s => ({ ...s, hits: 0, sunk: false, cells: s.cells.map(c => ({ ...c })) }));
 }
 
 function canPlace(board, ship, row, col, horizontal) {
@@ -112,6 +121,7 @@ function initGame() {
     abortAutonomous: false,
     autonomousOrder: null,
     shotCount: 0,
+    lastIdleShot: 0,
     history: []
   };
 
@@ -176,17 +186,21 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function logTypewriter(msg) {
+function logTypewriter(msg, listEl = logListEl, charDelay = 30) {
   const li = document.createElement('li');
-  logListEl.prepend(li);
+  listEl.prepend(li);
   return new Promise(resolve => {
     let i = 0;
     function step() {
       if (i < msg.length) {
         li.textContent += msg[i];
         i++;
-        li.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        setTimeout(step, 30);
+        if (getComputedStyle(listEl).overflowY === 'auto' || getComputedStyle(listEl).overflowY === 'scroll') {
+          listEl.scrollTop = 0;
+        } else {
+          li.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        setTimeout(step, charDelay);
       } else {
         resolve();
       }
@@ -195,15 +209,20 @@ function logTypewriter(msg) {
   });
 }
 
-async function cinematicSink(msg) {
-  const boards = document.querySelector('.boards');
-  if (boards) boards.classList.add('desaturated');
-  const typePromise = logTypewriter(msg);
+async function cinematicSink(msg, {
+  boardsEl = document.querySelector('.boards'),
+  logEl = logListEl,
+  charDelay = 30,
+  desaturateMs = 800,
+  beatMs = 1500
+} = {}) {
+  if (boardsEl) boardsEl.classList.add('desaturated');
+  const typePromise = logTypewriter(msg, logEl, charDelay);
   setTimeout(() => {
-    if (boards) boards.classList.remove('desaturated');
-  }, 800);
+    if (boardsEl) boardsEl.classList.remove('desaturated');
+  }, desaturateMs);
   await typePromise;
-  await delay(1500);
+  await delay(beatMs);
 }
 
 function updateStatus(msg) {
@@ -255,8 +274,20 @@ function endGame(winner) {
   finishAutonomous();
   updateStatus(`Game over — ${winner === 'Player' ? 'you' : 'the enemy'} won.`);
   log(`Game over — ${winner === 'Player' ? 'you' : 'the enemy'} won.`);
+  Devin.say(winner === 'Player' ? 'win' : 'lose');
   render();
-  setTimeout(() => showReport(winner), 400);
+  saveReplay(winner);
+  setTimeout(() => showReplayPrompt(winner), 400);
+}
+
+function saveReplay(winner) {
+  lastReplay = {
+    winner,
+    shotCount: state.shotCount,
+    history: state.history.map(h => ({ ...h })),
+    playerShips: deepCloneShips(state.playerShips),
+    enemyShips: deepCloneShips(state.enemyShips)
+  };
 }
 
 async function fireAtEnemy(shooter, r, c, reason) {
@@ -277,6 +308,7 @@ async function fireAtEnemy(shooter, r, c, reason) {
       c,
       result: result.hit ? (result.sunk ? 'sunk' : 'hit') : 'miss',
       shipName: result.ship ? result.ship.name : null,
+      shipId: result.ship ? result.ship.id : null,
       reason,
       shotNumber: state.shotCount
     });
@@ -290,12 +322,15 @@ async function fireAtEnemy(shooter, r, c, reason) {
       msg += ` — sunk ${result.ship.theme} — ${result.ship.tagline}`;
       statusMsg = `${shooter} sunk ${result.ship.theme}`;
       AudioSys.playSunk();
+      Devin.say('playerSink', { ship: result.ship });
     } else if (result.hit) {
       msg += ` — hit.`;
       statusMsg = `${shooter} hit!`;
+      Devin.say('playerHit');
     } else {
       msg += ` — miss.`;
       statusMsg = `${shooter} missed.`;
+      Devin.say('playerMiss');
     }
     if (reason) msg += ` (${reason})`;
     updateStatus(statusMsg);
@@ -314,6 +349,7 @@ async function fireAtEnemy(shooter, r, c, reason) {
         return true;
       }
       state.turn = 'enemy';
+      Devin.maybeIdle();
       enemyTurn();
       return true;
     }
@@ -326,6 +362,7 @@ async function fireAtEnemy(shooter, r, c, reason) {
     }
 
     state.turn = 'enemy';
+    Devin.maybeIdle();
     setTimeout(enemyTurn, 600);
     return true;
   } finally {
@@ -544,6 +581,7 @@ async function enemyTurn() {
     c,
     result: result.hit ? (result.sunk ? 'sunk' : 'hit') : 'miss',
     shipName: result.ship ? result.ship.name : null,
+    shipId: result.ship ? result.ship.id : null,
     reason,
     shotNumber: state.shotCount,
     heatValue
@@ -559,9 +597,11 @@ async function enemyTurn() {
     msg = `${msgBase} — hit and sunk your ${result.ship.name}! (${reason})`;
     updateStatus(`Enemy sank your ${result.ship.name}!`);
     AudioSys.playSunk();
+    Devin.say('enemySink', { ship: result.ship });
   } else if (result.hit) {
     msg = `${msgBase} — hit. (${reason})`;
     updateStatus('Enemy hit!');
+    Devin.say('enemyHit');
   } else {
     msg = `${msgBase} — miss. (${reason})`;
     updateStatus('Enemy missed.');
@@ -574,6 +614,7 @@ async function enemyTurn() {
       return;
     }
     state.turn = 'player';
+    Devin.maybeIdle();
     if (state.autonomousActive && !state.abortAutonomous) {
       autonomousStep();
     }
@@ -588,6 +629,7 @@ async function enemyTurn() {
   }
 
   state.turn = 'player';
+  Devin.maybeIdle();
 
   if (state.autonomousActive && !state.abortAutonomous) {
     setTimeout(autonomousStep, 600);
@@ -845,6 +887,7 @@ function planAdvised() {
   const order = orderInput.value.trim();
   if (!order) {
     updateStatus('Type an order for the gunner first.');
+    Devin.say('orderUnclear');
     return;
   }
   const pick = gunnerPick(order);
@@ -856,6 +899,7 @@ function planAdvised() {
   proposalEl.textContent = `Gunner proposes firing at ${coordLabel(pick.r, pick.c)}. “${pick.reason}” Click another cell to override, or Fire to approve.`;
   approveBtn.style.display = 'inline-block';
   updateStatus('Proposal ready. Approve or override.');
+  Devin.say('orderReceived');
 }
 
 function startAutonomous() {
@@ -863,6 +907,7 @@ function startAutonomous() {
   const order = orderInput.value.trim();
   if (!order) {
     updateStatus('Type an order for the gunner first.');
+    Devin.say('orderUnclear');
     return;
   }
   state.autonomousActive = true;
@@ -870,6 +915,7 @@ function startAutonomous() {
   state.autonomousOrder = order;
   updateAutonomyUI();
   log(`Gunner: “Engaging on order: ${order}”`);
+  Devin.say('orderReceived');
   autonomousStep();
 }
 
@@ -1002,26 +1048,38 @@ orderInput.addEventListener('keydown', e => {
   }
 });
 
-document.getElementById('report-close').addEventListener('click', () => {
-  reportEl.style.display = 'none';
+reportEl.addEventListener('click', e => {
+  if (e.target.matches('#report-close')) {
+    reportEl.style.display = 'none';
+  } else if (e.target.matches('#report-watch-again')) {
+    startReplay();
+  }
 });
 
-function showReport(winner) {
-  const playerShots = state.history.filter(h => h.actor === 'player');
-  const enemyShots = state.history.filter(h => h.actor === 'enemy');
+function showReplayPrompt(winner) {
+  const promptWinner = document.getElementById('replay-prompt-winner');
+  if (promptWinner) {
+    promptWinner.textContent = `${winner === 'Player' ? 'You won' : 'The enemy won'}.`;
+  }
+  document.getElementById('replay-prompt').style.display = 'flex';
+}
+
+function showReport(winner, data = state) {
+  const playerShots = data.history.filter(h => h.actor === 'player');
+  const enemyShots = data.history.filter(h => h.actor === 'enemy');
   const playerHits = playerShots.filter(h => h.result === 'hit' || h.result === 'sunk').length;
   const enemyHits = enemyShots.filter(h => h.result === 'hit' || h.result === 'sunk').length;
-  const playerSunk = state.enemyShips.filter(s => s.sunk).length;
-  const enemySunk = state.playerShips.filter(s => s.sunk).length;
+  const playerSunk = data.enemyShips.filter(s => s.sunk).length;
+  const enemySunk = data.playerShips.filter(s => s.sunk).length;
 
-  const turnPairs = Math.floor(state.shotCount / 2);
+  const turnPairs = Math.floor(data.shotCount / 2);
 
   const enemyMisses = enemyShots.length - enemyHits;
   const wastedShots = enemyShots.filter(h => h.result === 'miss' && h.heatValue === 0).length;
   const drySpell = longestDrySpell(enemyShots);
 
-  const insight = buildInsight(enemyShots, state.playerShips, wastedShots, drySpell);
-  const longestEnemy = findLongestEnemyShip();
+  const insight = buildInsight(enemyShots, data.playerShips, wastedShots, drySpell);
+  const longestEnemy = findLongestEnemyShip(data.enemyShips);
 
   reportBody.innerHTML = `
     <p class="report-winner">${winner === 'Player' ? 'You won' : 'The enemy won'} in ${turnPairs} turn${turnPairs === 1 ? '' : 's'}.</p>
@@ -1043,15 +1101,19 @@ function showReport(winner) {
     </div>
     <p>${insight}</p>
     ${winner === 'Player' ? `<p>${longestEnemy} held out the longest.</p>` : ''}
+    <div class="report-actions">
+      <button id="report-close" class="pill-btn primary">Close</button>
+      <button id="report-watch-again" class="pill-btn">Watch again</button>
+    </div>
   `;
   reportEl.style.display = 'flex';
 }
 
-function findLongestEnemyShip() {
-  const fallback = state.enemyShips.find(s => s.id === 'carrier');
+function findLongestEnemyShip(ships = state.enemyShips) {
+  const fallback = ships.find(s => s.id === 'carrier');
   let longest = fallback;
   let latest = -1;
-  for (const ship of state.enemyShips) {
+  for (const ship of ships) {
     if (ship.sunk && ship.sunkAt > latest) {
       latest = ship.sunkAt;
       longest = ship;
@@ -1111,6 +1173,148 @@ function buildInsight(enemyShots, playerShips, wasted, drySpell) {
 
   return parts.join(' ');
 }
+
+const Devin = (function () {
+  const used = new Set();
+  let muted = false;
+  let hideTimer = null;
+  const bubble = document.getElementById('devin-bubble');
+  const muteBtn = document.getElementById('devin-mute');
+  const avatar = document.getElementById('devin-avatar');
+  const tooltip = document.getElementById('devin-tooltip');
+
+  const lines = {
+    playerHit: [
+      'there you go',
+      'clean shot',
+      'that had to feel good',
+      'you were fishing for that one'
+    ],
+    playerMiss: [
+      'worth the try',
+      'we all miss sometimes',
+      'the pattern-density AI just laughed'
+    ],
+    playerSink: [
+      ({ ship }) => `and that's ${ship.theme}, gone`,
+      ({ ship }) => `${ship.tagline} — earned that one`,
+      ({ ship }) => `there goes ${ship.theme}`
+    ],
+    enemyHit: [
+      'ouch',
+      'they had a read on you',
+      'keep your composure'
+    ],
+    enemySink: [
+      ({ ship }) => `the ${ship.name} goes down. she held out.`
+    ],
+    orderReceived: [
+      'on it',
+      'working it now'
+    ],
+    orderUnclear: [
+      "not sure what you mean, want to rephrase?"
+    ],
+    idle: [
+      "you're taking your time, i respect it",
+      'the top-right quadrant is still wide open',
+      "just an observation: you haven't fired left of column D",
+      'the enemy AI is warming up its probability map',
+      'nice pace. methodical beats lucky most days'
+    ],
+    win: [
+      'GG',
+      'clean game',
+      'you sunk them all, well done'
+    ],
+    lose: [
+      'that one hurt',
+      'next time'
+    ]
+  };
+
+  function getText(line, ctx) {
+    return typeof line === 'function' ? line(ctx) : line;
+  }
+
+  function say(category, ctx = {}) {
+    if (muted) return;
+    if (category !== 'win' && category !== 'lose') {
+      if (!state || state.gameOver) return;
+    }
+
+    const pool = lines[category] || [];
+    if (pool.length === 0) return;
+
+    const available = pool.filter(l => !used.has(getText(l, ctx)));
+    if (available.length === 0) {
+      pool.forEach(l => used.delete(getText(l, ctx)));
+      available.push(...pool);
+    }
+
+    const line = available[Math.floor(Math.random() * available.length)];
+    const text = getText(line, ctx);
+    used.add(text);
+    show(text);
+  }
+
+  function show(text) {
+    if (!bubble) return;
+    bubble.textContent = text;
+    bubble.classList.add('visible');
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      bubble.classList.remove('visible');
+    }, 4000);
+  }
+
+  function maybeIdle() {
+    if (muted || !state || state.gameOver) return;
+    if (typeof state.lastIdleShot === 'undefined') state.lastIdleShot = 0;
+    const threshold = 8 + Math.floor(Math.random() * 3);
+    if (state.shotCount - state.lastIdleShot >= threshold) {
+      say('idle');
+      state.lastIdleShot = state.shotCount;
+    }
+  }
+
+  function setMuted(m) {
+    muted = m;
+    if (muteBtn) {
+      muteBtn.textContent = muted ? 'Devin off' : 'Devin on';
+      muteBtn.setAttribute('aria-pressed', String(muted));
+      muteBtn.setAttribute('aria-label', muted ? 'Devin is muted' : 'Devin is speaking');
+    }
+  }
+
+  function toggle() {
+    setMuted(!muted);
+  }
+
+  function toggleTooltip(show) {
+    if (!tooltip) return;
+    tooltip.classList.toggle('visible', show);
+  }
+
+  if (muteBtn) {
+    muteBtn.addEventListener('click', toggle);
+  }
+
+  if (avatar) {
+    avatar.addEventListener('mouseenter', () => toggleTooltip(true));
+    avatar.addEventListener('mouseleave', () => toggleTooltip(false));
+    avatar.addEventListener('focus', () => toggleTooltip(true));
+    avatar.addEventListener('blur', () => toggleTooltip(false));
+    avatar.addEventListener('click', () => toggleTooltip(!tooltip.classList.contains('visible')));
+  }
+
+  if (tooltip) {
+    tooltip.addEventListener('mouseenter', () => toggleTooltip(true));
+    tooltip.addEventListener('mouseleave', () => toggleTooltip(false));
+  }
+
+  return { say, maybeIdle, setMuted, toggle, lines };
+})();
 
 const AudioSys = (function () {
   let ctx = null;
@@ -1442,6 +1646,266 @@ function initTilt() {
     targetX = 0;
     targetY = 0;
   }, { passive: true });
+}
+
+let replay = null;
+const replayOverlay = document.getElementById('replay-overlay');
+const replayPrompt = document.getElementById('replay-prompt');
+const replayPlayerBoardEl = document.getElementById('replay-player-board');
+const replayEnemyBoardEl = document.getElementById('replay-enemy-board');
+const replayLogListEl = document.getElementById('replay-log-list');
+const replayStatusEl = document.getElementById('replay-status');
+const replayReasonEl = document.getElementById('replay-reason');
+const replayPlayPauseBtn = document.getElementById('replay-play-pause');
+const replayRestartBtn = document.getElementById('replay-restart');
+const replaySkipBtn = document.getElementById('replay-skip');
+const replaySpeedInput = document.getElementById('replay-speed');
+const replaySpeedLabel = document.getElementById('replay-speed-label');
+
+function placeShipsFromSnapshot(board, ships) {
+  for (const ship of ships) {
+    for (const { r, c } of ship.cells) {
+      board[r][c] = { status: STATUS.SHIP, shipId: ship.id };
+    }
+  }
+}
+
+function setupReplay() {
+  const data = lastReplay;
+  if (!data) return null;
+  const playerBoard = createEmptyBoard();
+  const enemyBoard = createEmptyBoard();
+  const playerShips = snapshotShips(data.playerShips);
+  const enemyShips = snapshotShips(data.enemyShips);
+  placeShipsFromSnapshot(playerBoard, playerShips);
+  placeShipsFromSnapshot(enemyBoard, enemyShips);
+  return {
+    history: data.history.slice(),
+    playerBoard,
+    enemyBoard,
+    playerShips,
+    enemyShips,
+    index: 0,
+    speed: parseInt(replaySpeedInput.value, 10) || 4,
+    paused: false,
+    cancelled: false,
+    awaitingResume: null
+  };
+}
+
+function renderReplay() {
+  if (!replay) return;
+  renderBoard(replayPlayerBoardEl, replay.playerBoard, false, null, 0);
+  renderBoard(replayEnemyBoardEl, replay.enemyBoard, true, null, 0);
+}
+
+function updateReplayStatus(text) {
+  if (replayStatusEl) replayStatusEl.textContent = text || '';
+}
+
+async function waitForReplayResume() {
+  if (!replay || !replay.paused) return;
+  if (replay.awaitingResume) return replay.awaitingResume;
+  replay.awaitingResume = new Promise(resolve => {
+    replay._resume = resolve;
+  });
+  await replay.awaitingResume;
+  replay.awaitingResume = null;
+  replay._resume = null;
+}
+
+function resumeReplay() {
+  if (replay && replay._resume) {
+    replay.paused = false;
+    replay._resume();
+  }
+}
+
+function setReplayPaused(paused) {
+  if (!replay) return;
+  replay.paused = paused;
+  if (replayPlayPauseBtn) replayPlayPauseBtn.textContent = paused ? 'Play' : 'Pause';
+  if (!paused) resumeReplay();
+}
+
+function replayStepDelay(ms) {
+  if (!replay) return Promise.resolve();
+  return delay(ms / replay.speed);
+}
+
+async function showReplayReason(reason, durationMs) {
+  if (!replayReasonEl) return;
+  replayReasonEl.textContent = reason || '';
+  replayReasonEl.classList.add('visible');
+  if (durationMs > 0) {
+    await replayStepDelay(durationMs);
+    replayReasonEl.classList.remove('visible');
+  }
+}
+
+function logToReplay(msg) {
+  if (!replayLogListEl) return;
+  const li = document.createElement('li');
+  li.textContent = msg;
+  replayLogListEl.prepend(li);
+  replayLogListEl.scrollTop = 0;
+}
+
+async function applyReplayShot(step) {
+  if (!replay || replay.cancelled) return;
+  const isPlayer = step.actor === 'player';
+  const board = isPlayer ? replay.enemyBoard : replay.playerBoard;
+  const ships = isPlayer ? replay.enemyShips : replay.playerShips;
+  const shooter = isPlayer ? (step.reason ? 'Gunner' : 'You') : 'Enemy';
+  const verb = shooter === 'You' ? 'fire' : 'fires';
+
+  const result = fire(board, ships, step.r, step.c);
+  if (result.alreadyFired) return;
+
+  AudioSys.playCannon();
+
+  let msg = `${shooter} ${verb} at ${coordLabel(step.r, step.c)}`;
+  let statusMsg;
+  if (result.hit && result.sunk) {
+    result.ship.sunkAt = step.shotNumber;
+    const shipLabel = isPlayer ? `${result.ship.theme} — ${result.ship.tagline}` : `your ${result.ship.name}`;
+    msg += ` — sunk ${shipLabel}`;
+    statusMsg = `${shooter} sunk ${isPlayer ? result.ship.theme : result.ship.name}`;
+    AudioSys.playSunk();
+  } else if (result.hit) {
+    msg += ' — hit.';
+    statusMsg = `${shooter} hit!`;
+  } else {
+    msg += ' — miss.';
+    statusMsg = `${shooter} missed.`;
+  }
+  if (step.reason) msg += ` (${step.reason})`;
+
+  updateReplayStatus(statusMsg);
+  showReplayReason(step.reason, 600);
+  renderReplay();
+
+  if (result.hit && result.sunk) {
+    await cinematicSink(msg, {
+      boardsEl: document.getElementById('replay-boards'),
+      logEl: replayLogListEl,
+      charDelay: 30 / replay.speed,
+      desaturateMs: 800 / replay.speed,
+      beatMs: 1500 / replay.speed
+    });
+  } else {
+    logToReplay(msg);
+  }
+}
+
+async function runReplay() {
+  if (!replay) return;
+  replay.cancelled = false;
+  replay.paused = false;
+  if (replayPlayPauseBtn) replayPlayPauseBtn.textContent = 'Pause';
+
+  while (replay.index < replay.history.length && !replay.cancelled) {
+    if (replay.paused) {
+      await waitForReplayResume();
+      continue;
+    }
+    const step = replay.history[replay.index];
+    await applyReplayShot(step);
+    replay.index++;
+    if (replay.index < replay.history.length && !replay.cancelled) {
+      await replayStepDelay(1000);
+    }
+  }
+
+  if (!replay.cancelled) {
+    finishReplay();
+  }
+}
+
+function startReplay() {
+  if (replayOverlay) replayOverlay.style.display = 'flex';
+  if (reportEl) reportEl.style.display = 'none';
+  if (replayPrompt) replayPrompt.style.display = 'none';
+  replay = setupReplay();
+  if (replayLogListEl) replayLogListEl.innerHTML = '';
+  if (replayReasonEl) {
+    replayReasonEl.textContent = '';
+    replayReasonEl.classList.remove('visible');
+  }
+  const replayCard = document.querySelector('.replay-card');
+  if (replayCard) replayCard.scrollTop = 0;
+  if (replayOverlay) replayOverlay.scrollTop = 0;
+  updateReplayStatus('Replay starting…');
+  renderReplay();
+  runReplay();
+}
+
+function restartReplay() {
+  if (!replay) return;
+  replay.cancelled = true;
+  setTimeout(() => {
+    startReplay();
+  }, 50);
+}
+
+function skipReplayToEnd() {
+  if (!replay) return;
+  replay.cancelled = true;
+  for (let i = replay.index; i < replay.history.length; i++) {
+    const step = replay.history[i];
+    const isPlayer = step.actor === 'player';
+    const board = isPlayer ? replay.enemyBoard : replay.playerBoard;
+    const ships = isPlayer ? replay.enemyShips : replay.playerShips;
+    const result = fire(board, ships, step.r, step.c);
+    if (result.hit && result.sunk) result.ship.sunkAt = step.shotNumber;
+  }
+  replay.index = replay.history.length;
+  renderReplay();
+  finishReplay();
+}
+
+function finishReplay() {
+  if (replayOverlay) replayOverlay.style.display = 'none';
+  if (lastReplay) {
+    showReport(lastReplay.winner, lastReplay);
+  }
+}
+
+if (replayPrompt) {
+  document.getElementById('watch-replay').addEventListener('click', () => {
+    startReplay();
+  });
+  document.getElementById('skip-report').addEventListener('click', () => {
+    if (replayPrompt) replayPrompt.style.display = 'none';
+    if (lastReplay) showReport(lastReplay.winner, lastReplay);
+  });
+}
+
+if (replayPlayPauseBtn) {
+  replayPlayPauseBtn.addEventListener('click', () => {
+    if (!replay) return;
+    setReplayPaused(!replay.paused);
+  });
+}
+
+if (replayRestartBtn) {
+  replayRestartBtn.addEventListener('click', () => {
+    restartReplay();
+  });
+}
+
+if (replaySkipBtn) {
+  replaySkipBtn.addEventListener('click', () => {
+    skipReplayToEnd();
+  });
+}
+
+if (replaySpeedInput) {
+  replaySpeedInput.addEventListener('input', () => {
+    const val = parseInt(replaySpeedInput.value, 10);
+    if (replaySpeedLabel) replaySpeedLabel.textContent = val + 'x';
+    if (replay) replay.speed = val;
+  });
 }
 
 initGame();

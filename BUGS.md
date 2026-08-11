@@ -55,3 +55,33 @@ Keep a running list of issues we hit while building, plus how we fixed them.
 - **Fix**: Added a `state.processing` flag that blocks new player-side shots until the current turn fully resolves.
 - **File**: `app.js`
 - **Date**: 2026-08-11
+
+## 10. Replay after-action report showed 0 enemy ships sunk after a player win
+- **Symptom**: `saveReplay()` used `snapshotShips()` for the saved ship state, which reset `hits: 0` and `sunk: false` on every ship, so the win report counted `Enemy ships sunk: 0/5`.
+- **Fix**: Added `deepCloneShips()` that preserves hits, sunk flags, and `sunkAt` values, and used it only for the end-of-game replay snapshot. Kept `snapshotShips()` for replay setup so the replay boards start empty.
+- **File**: `app.js`
+- **Date**: 2026-08-11
+
+## 11. Replay log used "fires" for the player
+- **Symptom**: Replay log messages read "You fires at A4 — hit." because the shooter/verb template always used `fires`.
+- **Fix**: Added `const verb = shooter === 'You' ? 'fire' : 'fires';` in `applyReplayShot()` so the log reads "You fire at A4" and "Enemy/Gunner fires at A4".
+- **File**: `app.js`
+- **Date**: 2026-08-11
+
+## 12. Devin ship-sink line had an extra "the"
+- **Symptom**: When the player sunk a themed ship, Devin's bubble read "and that's the The Vercelerator, gone" because ship themes already include "The".
+- **Fix**: Removed the extra "the" from the `playerSink` line templates so the message reads "and that's The Vercelerator, gone".
+- **File**: `app.js`
+- **Date**: 2026-08-11
+
+## 13. Replay card scrolled itself while typewriter log entries played
+- **Symptom**: As each replay log entry was typed out, `li.scrollIntoView()` scrolled the nearest ancestor, causing the whole `.replay-card` to scroll down and hide the title/status.
+- **Fix**: Made the replay log list scrollable (`overflow-y: auto`) and updated `logTypewriter()` to reset `listEl.scrollTop = 0` for scrollable lists instead of calling `scrollIntoView()`. Also reset `replay-card` and `replay-overlay` scroll positions when `startReplay()` runs.
+- **File**: `style.css`, `app.js`
+- **Date**: 2026-08-11
+
+## 14. Replay overlay card was vertically centered and cut off the top
+- **Symptom**: The replay card centered itself in the viewport and the title/status were pushed above the visible area.
+- **Fix**: Changed `.replay-overlay` from `align-items: center` to `align-items: flex-start` with extra top padding, and set `.replay-card` to `max-height: calc(100vh - 4rem)` with `overflow-y: auto`. Reduced replay board cell size with `.replay-boards { --cell-size: 24px; }` so the card fits better on small screens.
+- **File**: `style.css`
+- **Date**: 2026-08-11

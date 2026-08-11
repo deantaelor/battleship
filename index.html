@@ -102,8 +102,76 @@
     <div class="report-card">
       <h2>After-action report</h2>
       <div id="report-body"></div>
-      <button id="report-close" class="pill-btn primary">Close</button>
     </div>
+  </div>
+
+  <div id="replay-prompt" class="report-overlay" style="display: none;">
+    <div class="report-card">
+      <h2>Game over</h2>
+      <p id="replay-prompt-winner" class="report-winner"></p>
+      <div class="report-actions">
+        <button id="watch-replay" class="pill-btn primary">Watch the replay</button>
+        <button id="skip-report" class="pill-btn">Skip to report</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="replay-overlay" class="replay-overlay" style="display: none;">
+    <div class="replay-card">
+      <h2>Replay</h2>
+      <p id="replay-status" class="replay-status">Ready</p>
+      <div id="replay-reason" class="replay-reason"></div>
+      <div class="replay-boards" id="replay-boards">
+        <div class="board-wrap">
+          <h2>Your Fleet</h2>
+          <div id="replay-player-board" class="board"></div>
+        </div>
+        <div class="board-wrap">
+          <h2>Enemy Waters</h2>
+          <div id="replay-enemy-board" class="board"></div>
+        </div>
+      </div>
+      <section class="logs replay-logs">
+        <h2>Replay Log</h2>
+        <ul id="replay-log-list"></ul>
+      </section>
+      <div class="replay-controls">
+        <button id="replay-play-pause" class="pill-btn primary">Pause</button>
+        <button id="replay-restart" class="pill-btn">Restart</button>
+        <button id="replay-skip" class="pill-btn">Skip to end</button>
+        <div class="replay-speed">
+          <label for="replay-speed">Speed</label>
+          <input id="replay-speed" type="range" min="1" max="8" step="1" value="4" list="replay-speed-ticks">
+          <datalist id="replay-speed-ticks">
+            <option value="1" label="1x"></option>
+            <option value="2" label="2x"></option>
+            <option value="4" label="4x"></option>
+            <option value="8" label="8x"></option>
+          </datalist>
+          <span id="replay-speed-label">4x</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="devin" class="devin" aria-label="Devin companion">
+    <div id="devin-bubble" class="devin-bubble" aria-live="polite"></div>
+    <div class="devin-row">
+      <div class="devin-avatar" id="devin-avatar" aria-label="Devin" role="button" tabindex="0">
+        <svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="14" y="14" width="52" height="52" rx="26" fill="#D6E0D8" />
+          <circle class="devin-eye" cx="30" cy="34" r="4" fill="#3C4E5C" />
+          <circle class="devin-eye" cx="50" cy="34" r="4" fill="#3C4E5C" />
+          <path d="M28 52 Q40 59 52 52" stroke="#3C4E5C" fill="none" stroke-width="2.5" stroke-linecap="round" />
+        </svg>
+        <span class="devin-q" aria-hidden="true">?</span>
+      </div>
+      <button id="devin-mute" class="devin-mute pill-btn" aria-pressed="false" aria-label="Devin is speaking">Devin on</button>
+    </div>
+  </div>
+
+  <div id="devin-tooltip" class="devin-tooltip" aria-hidden="true">
+    <p>devin is cognition's autonomous software engineer. this whole game was built with devin. see the build log at the bottom of the screen for the receipts.</p>
   </div>
 
   <script src="app.js"></script>
