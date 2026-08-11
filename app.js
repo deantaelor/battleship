@@ -1,10 +1,10 @@
 const BOARD_SIZE = 10;
 const SHIPS = [
-  { id: 'carrier', name: 'Carrier', size: 5 },
-  { id: 'battleship', name: 'Battleship', size: 4 },
-  { id: 'cruiser', name: 'Cruiser', size: 3 },
-  { id: 'submarine', name: 'Submarine', size: 3 },
-  { id: 'destroyer', name: 'Destroyer', size: 2 }
+  { id: 'carrier', name: 'Carrier', theme: 'The Vercelerator', size: 5, tagline: 'top-3 attainment, 12 quarters running' },
+  { id: 'battleship', name: 'Battleship', theme: 'The Cipher', size: 4, tagline: 'internal competitive-intel app, built in v0' },
+  { id: 'cruiser', name: 'Cruiser', theme: 'The Enablement Play', size: 3, tagline: 'opened the AI/Data buyer segment' },
+  { id: 'submarine', name: 'Submarine', theme: 'The 228%', size: 3, tagline: 'single-month attainment record' },
+  { id: 'destroyer', name: 'Destroyer', theme: 'Houston-to-Austin', size: 2, tagline: 'relocating for the hub' }
 ];
 
 const STATUS = {
@@ -247,8 +247,9 @@ function fireAtEnemy(shooter, r, c, reason) {
   const verb = shooter === 'You' ? 'fire' : 'fires';
   let msg = `${shooter} ${verb} at ${coordLabel(r, c)}`;
   if (result.hit && result.sunk) {
-    msg += ` — hit and sunk the ${result.ship.name}!`;
-    updateStatus(`${shooter} sank the ${result.ship.name}!`);
+    result.ship.sunkAt = state.shotCount;
+    msg += ` — sunk ${result.ship.theme} — ${result.ship.tagline}`;
+    updateStatus(`${shooter} sunk ${result.ship.theme}`);
   } else if (result.hit) {
     msg += ` — hit.`;
     updateStatus(`${shooter} hit!`);
@@ -945,6 +946,7 @@ function showReport(winner) {
   const drySpell = longestDrySpell(enemyShots);
 
   const insight = buildInsight(enemyShots, state.playerShips, wastedShots, drySpell);
+  const longestEnemy = findLongestEnemyShip();
 
   reportBody.innerHTML = `
     <p class="report-winner">${winner === 'Player' ? 'You won' : 'The enemy won'} in ${turnPairs} turn${turnPairs === 1 ? '' : 's'}.</p>
@@ -965,8 +967,23 @@ function showReport(winner) {
       </div>
     </div>
     <p>${insight}</p>
+    ${winner === 'Player' ? `<p>${longestEnemy} held out the longest.</p>` : ''}
   `;
   reportEl.style.display = 'flex';
+}
+
+function findLongestEnemyShip() {
+  const fallback = state.enemyShips.find(s => s.id === 'carrier');
+  let longest = fallback;
+  let latest = -1;
+  for (const ship of state.enemyShips) {
+    if (ship.sunk && ship.sunkAt > latest) {
+      latest = ship.sunkAt;
+      longest = ship;
+    }
+  }
+  const name = longest.theme;
+  return name.startsWith('The') ? name : `The ${name}`;
 }
 
 function longestDrySpell(shots) {
