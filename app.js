@@ -1603,6 +1603,16 @@ if (buildLog && buildLogToggle) {
   });
 }
 
+function exportBuildLog() {
+  if (buildLog) buildLog.classList.add('open');
+  window.print();
+}
+
+const buildLogExport = document.getElementById('build-log-export');
+if (buildLogExport) {
+  buildLogExport.addEventListener('click', exportBuildLog);
+}
+
 function initTilt() {
   const stage = document.getElementById('stage');
   const inner = stage ? stage.querySelector('.stage-inner') : null;
