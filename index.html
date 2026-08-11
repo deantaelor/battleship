@@ -10,60 +10,93 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="site-header">
-    <h1>Battleship</h1>
-    <p class="subtitle">manual, advised, and autonomous fire control</p>
-  </header>
+  <button id="mute-toggle" class="pill-btn mute-btn" aria-pressed="false" aria-label="Sound is on">Sound on</button>
+  <div class="app-content">
+    <header class="site-header">
+      <h1>Battleship</h1>
+      <p class="subtitle">manual, advised, and autonomous fire control</p>
+    </header>
 
-  <main>
-    <div class="top-bar">
-      <button id="new-game" class="pill-btn">New Game</button>
+    <main>
+      <div class="top-bar">
+        <button id="new-game" class="pill-btn">New Game</button>
 
-      <div class="autonomy-tabs" role="tablist" aria-label="Autonomy level">
-        <button class="pill-btn active" data-autonomy="manual" aria-pressed="true">Manual</button>
-        <button class="pill-btn" data-autonomy="advised" aria-pressed="false">Advised</button>
-        <button class="pill-btn" data-autonomy="autonomous" aria-pressed="false">Autonomous</button>
-      </div>
+        <div class="autonomy-tabs" role="tablist" aria-label="Autonomy level">
+          <button class="pill-btn active" data-autonomy="manual" aria-pressed="true">Manual</button>
+          <button class="pill-btn" data-autonomy="advised" aria-pressed="false">Advised</button>
+          <button class="pill-btn" data-autonomy="autonomous" aria-pressed="false">Autonomous</button>
+        </div>
 
-      <div class="difficulty-wrap">
-        <label for="difficulty-select">Enemy AI</label>
-        <div class="select-wrap">
-          <select id="difficulty-select">
-            <option value="random">Random</option>
-            <option value="hunt">Hunt & Target</option>
-            <option value="probability">Probability Density</option>
-          </select>
+        <div class="difficulty-wrap">
+          <label for="difficulty-select">Enemy AI</label>
+          <div class="select-wrap">
+            <select id="difficulty-select">
+              <option value="random">Random</option>
+              <option value="hunt">Hunt & Target</option>
+              <option value="probability">Probability Density</option>
+            </select>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div id="command-panel" class="command-panel">
-      <label for="order-input">Order to gunner</label>
-      <input id="order-input" type="text" placeholder="e.g. finish whatever we wounded" autocomplete="off">
-      <button id="action-btn" class="pill-btn primary">Plan</button>
-      <button id="approve-btn" class="pill-btn primary" style="display: none;">Fire as proposed</button>
-      <button id="abort-btn" class="pill-btn" style="display: none;">Stand down</button>
-      <div id="proposal" class="proposal"></div>
-    </div>
-
-    <div class="status" id="status">Click a cell on the enemy board to fire.</div>
-
-    <div class="boards">
-      <div class="board-wrap">
-        <h2>Your Fleet</h2>
-        <div id="player-board" class="board"></div>
+      <div id="command-panel" class="command-panel">
+        <label for="order-input">Order to gunner</label>
+        <input id="order-input" type="text" placeholder="e.g. finish whatever we wounded" autocomplete="off">
+        <button id="action-btn" class="pill-btn primary">Plan</button>
+        <button id="approve-btn" class="pill-btn primary" style="display: none;">Fire as proposed</button>
+        <button id="abort-btn" class="pill-btn" style="display: none;">Stand down</button>
+        <div id="proposal" class="proposal"></div>
       </div>
-      <div class="board-wrap">
-        <h2>Enemy Waters</h2>
-        <div id="enemy-board" class="board"></div>
-      </div>
-    </div>
 
-    <section class="logs">
-      <h2>Ship’s Log</h2>
-      <ul id="log-list"></ul>
-    </section>
-  </main>
+      <div class="status" id="status">Click a cell on the enemy board to fire.</div>
+
+      <div class="stage" id="stage">
+        <div class="boards stage-inner">
+          <div class="board-wrap">
+            <h2>Your Fleet</h2>
+            <div id="player-board" class="board"></div>
+          </div>
+          <div class="board-wrap">
+            <h2>Enemy Waters</h2>
+            <div id="enemy-board" class="board"></div>
+          </div>
+        </div>
+      </div>
+
+      <section class="logs">
+        <h2>Ship’s Log</h2>
+        <ul id="log-list"></ul>
+      </section>
+
+      <section id="build-log" class="build-log open" aria-expanded="true">
+        <button id="build-log-toggle" class="build-log-tab pill-btn">
+          <span>Devin session</span>
+          <span id="build-log-count">0 bugs caught</span>
+        </button>
+        <div class="build-log-body">
+          <p class="build-log-header">built by devin — <span id="build-log-total">0</span> bugs caught and fixed</p>
+          <ul id="build-log-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="hero" class="hero-overlay" aria-hidden="true">
+    <div class="compass">
+      <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <circle cx="60" cy="60" r="56" fill="none" stroke="#C9B59D" stroke-width="1"/>
+        <circle cx="60" cy="60" r="44" fill="none" stroke="#C9B59D" stroke-width="1"/>
+        <path d="M60 8 L64 52 L60 56 L56 52 Z" fill="#3C4E5C"/>
+        <path d="M60 112 L56 68 L60 64 L64 68 Z" fill="#C9B59D"/>
+        <line x1="60" y1="12" x2="60" y2="22" stroke="#C9B59D" stroke-width="1"/>
+        <line x1="60" y1="98" x2="60" y2="108" stroke="#C9B59D" stroke-width="1"/>
+        <line x1="12" y1="60" x2="22" y2="60" stroke="#C9B59D" stroke-width="1"/>
+        <line x1="98" y1="60" x2="108" y2="60" stroke="#C9B59D" stroke-width="1"/>
+      </svg>
+    </div>
+    <h1 class="hero-title">Battleship</h1>
+    <p class="hero-subtitle">a naval command simulation</p>
+  </div>
 
   <div id="report" class="report-overlay" style="display: none;">
     <div class="report-card">

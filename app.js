@@ -101,6 +101,7 @@ function initGame() {
     playerShips,
     enemyShips,
     turn: 'player',
+    processing: false,
     gameOver: false,
     autonomy: state ? state.autonomy : 'manual',
     difficulty: difficultySelect.value,
@@ -171,6 +172,40 @@ function log(msg) {
   logListEl.prepend(li);
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function logTypewriter(msg) {
+  const li = document.createElement('li');
+  logListEl.prepend(li);
+  return new Promise(resolve => {
+    let i = 0;
+    function step() {
+      if (i < msg.length) {
+        li.textContent += msg[i];
+        i++;
+        li.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        setTimeout(step, 30);
+      } else {
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
+async function cinematicSink(msg) {
+  const boards = document.querySelector('.boards');
+  if (boards) boards.classList.add('desaturated');
+  const typePromise = logTypewriter(msg);
+  setTimeout(() => {
+    if (boards) boards.classList.remove('desaturated');
+  }, 800);
+  await typePromise;
+  await delay(1500);
+}
+
 function updateStatus(msg) {
   statusEl.textContent = msg;
 }
@@ -224,57 +259,78 @@ function endGame(winner) {
   setTimeout(() => showReport(winner), 400);
 }
 
-function fireAtEnemy(shooter, r, c, reason) {
-  if (state.gameOver || state.turn !== 'player') return false;
+async function fireAtEnemy(shooter, r, c, reason) {
+  if (state.gameOver || state.turn !== 'player' || state.processing) return false;
+  state.processing = true;
 
-  const result = fire(state.enemyBoard, state.enemyShips, r, c);
-  if (result.alreadyFired) {
-    updateStatus(`${shooter} already fired there. Pick another cell.`);
-    return false;
-  }
+  try {
+    const result = fire(state.enemyBoard, state.enemyShips, r, c);
+    if (result.alreadyFired) {
+      updateStatus(`${shooter} already fired there. Pick another cell.`);
+      return false;
+    }
 
-  state.shotCount++;
-  state.history.push({
-    actor: 'player',
-    r,
-    c,
-    result: result.hit ? (result.sunk ? 'sunk' : 'hit') : 'miss',
-    shipName: result.ship ? result.ship.name : null,
-    reason,
-    shotNumber: state.shotCount
-  });
+    state.shotCount++;
+    state.history.push({
+      actor: 'player',
+      r,
+      c,
+      result: result.hit ? (result.sunk ? 'sunk' : 'hit') : 'miss',
+      shipName: result.ship ? result.ship.name : null,
+      reason,
+      shotNumber: state.shotCount
+    });
 
-  const verb = shooter === 'You' ? 'fire' : 'fires';
-  let msg = `${shooter} ${verb} at ${coordLabel(r, c)}`;
-  if (result.hit && result.sunk) {
-    result.ship.sunkAt = state.shotCount;
-    msg += ` — sunk ${result.ship.theme} — ${result.ship.tagline}`;
-    updateStatus(`${shooter} sunk ${result.ship.theme}`);
-  } else if (result.hit) {
-    msg += ` — hit.`;
-    updateStatus(`${shooter} hit!`);
-  } else {
-    msg += ` — miss.`;
-    updateStatus(`${shooter} missed.`);
-  }
-  if (reason) msg += ` (${reason})`;
-  log(msg);
+    const verb = shooter === 'You' ? 'fire' : 'fires';
+    let msg = `${shooter} ${verb} at ${coordLabel(r, c)}`;
+    let statusMsg;
+    AudioSys.playCannon();
+    if (result.hit && result.sunk) {
+      result.ship.sunkAt = state.shotCount;
+      msg += ` — sunk ${result.ship.theme} — ${result.ship.tagline}`;
+      statusMsg = `${shooter} sunk ${result.ship.theme}`;
+      AudioSys.playSunk();
+    } else if (result.hit) {
+      msg += ` — hit.`;
+      statusMsg = `${shooter} hit!`;
+    } else {
+      msg += ` — miss.`;
+      statusMsg = `${shooter} missed.`;
+    }
+    if (reason) msg += ` (${reason})`;
+    updateStatus(statusMsg);
 
-  state.proposal = null;
-  proposalEl.textContent = '';
-  approveBtn.style.display = 'none';
+    state.proposal = null;
+    proposalEl.textContent = '';
+    approveBtn.style.display = 'none';
 
-  updateHeatmap();
-  render();
+    updateHeatmap();
+    render();
 
-  if (allSunk(state.enemyShips)) {
-    endGame('Player');
+    if (result.hit && result.sunk) {
+      await cinematicSink(msg);
+      if (allSunk(state.enemyShips)) {
+        endGame('Player');
+        return true;
+      }
+      state.turn = 'enemy';
+      enemyTurn();
+      return true;
+    }
+
+    log(msg);
+
+    if (allSunk(state.enemyShips)) {
+      endGame('Player');
+      return true;
+    }
+
+    state.turn = 'enemy';
+    setTimeout(enemyTurn, 600);
     return true;
+  } finally {
+    state.processing = false;
   }
-
-  state.turn = 'enemy';
-  setTimeout(enemyTurn, 600);
-  return true;
 }
 
 function getAvailableCells(board) {
@@ -469,7 +525,7 @@ function chooseEnemyShot() {
   return { ...cell, reason: 'falling back to a random shot', heatValue: heat[cell.r][cell.c] };
 }
 
-function enemyTurn() {
+async function enemyTurn() {
   if (state.gameOver) return;
   if (state.autonomousActive && state.abortAutonomous) {
     finishAutonomous();
@@ -496,16 +552,35 @@ function enemyTurn() {
   updateHeatmap();
   render();
 
+  const msgBase = `Enemy fires at ${coordLabel(r, c)}`;
+  let msg;
+  AudioSys.playCannon();
   if (result.hit && result.sunk) {
-    log(`Enemy fires at ${coordLabel(r, c)} — hit and sunk your ${result.ship.name}! (${reason})`);
+    msg = `${msgBase} — hit and sunk your ${result.ship.name}! (${reason})`;
     updateStatus(`Enemy sank your ${result.ship.name}!`);
+    AudioSys.playSunk();
   } else if (result.hit) {
-    log(`Enemy fires at ${coordLabel(r, c)} — hit. (${reason})`);
+    msg = `${msgBase} — hit. (${reason})`;
     updateStatus('Enemy hit!');
   } else {
-    log(`Enemy fires at ${coordLabel(r, c)} — miss. (${reason})`);
+    msg = `${msgBase} — miss. (${reason})`;
     updateStatus('Enemy missed.');
   }
+
+  if (result.hit && result.sunk) {
+    await cinematicSink(msg);
+    if (allSunk(state.playerShips)) {
+      endGame('Enemy');
+      return;
+    }
+    state.turn = 'player';
+    if (state.autonomousActive && !state.abortAutonomous) {
+      autonomousStep();
+    }
+    return;
+  }
+
+  log(msg);
 
   if (allSunk(state.playerShips)) {
     endGame('Enemy');
@@ -798,7 +873,7 @@ function startAutonomous() {
   autonomousStep();
 }
 
-function autonomousStep() {
+async function autonomousStep() {
   if (state.gameOver || state.abortAutonomous || !state.autonomousActive) {
     finishAutonomous();
     return;
@@ -810,7 +885,7 @@ function autonomousStep() {
     finishAutonomous();
     return;
   }
-  fireAtEnemy('Gunner', pick.r, pick.c, pick.reason);
+  await fireAtEnemy('Gunner', pick.r, pick.c, pick.reason);
 }
 
 function finishAutonomous() {
@@ -1037,4 +1112,338 @@ function buildInsight(enemyShots, playerShips, wasted, drySpell) {
   return parts.join(' ');
 }
 
+const AudioSys = (function () {
+  let ctx = null;
+  let master = null;
+  let muted = false;
+  let running = false;
+
+  function init() {
+    if (ctx) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      ctx = new Ctx();
+      master = ctx.createGain();
+      master.gain.value = 0.35;
+      master.connect(ctx.destination);
+      startOcean();
+      scheduleSeagulls();
+    } catch (e) {
+      // audio is optional atmosphere
+    }
+  }
+
+  function resume() {
+    init();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    running = true;
+  }
+
+  function noiseBuffer(duration, filterFreq = null) {
+    const sampleRate = ctx.sampleRate;
+    const frames = sampleRate * duration;
+    const buffer = ctx.createBuffer(1, frames, sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+    if (filterFreq) {
+      // compute filtered in-place using simple lowpass approximation
+      let last = 0;
+      const a = 1 - Math.exp(-2 * Math.PI * filterFreq / sampleRate);
+      for (let i = 0; i < frames; i++) {
+        last += a * (data[i] - last);
+        data[i] = last;
+      }
+    }
+    return buffer;
+  }
+
+  function startOcean() {
+    if (!ctx) return;
+    const buffer = noiseBuffer(8);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 220;
+
+    const swell = ctx.createGain();
+    swell.gain.value = 0.12;
+
+    source.connect(lowpass);
+    lowpass.connect(swell);
+    swell.connect(master);
+    source.start();
+
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.12;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.06;
+    lfo.connect(lfoGain);
+    lfoGain.connect(swell.gain);
+    lfo.start();
+  }
+
+  function scheduleSeagulls() {
+    if (!ctx) return;
+    const next = () => 12000 + Math.random() * 25000;
+    const loop = () => {
+      playSeagull();
+      setTimeout(loop, next());
+    };
+    setTimeout(loop, next());
+  }
+
+  function playSeagull() {
+    if (!ctx || muted) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1300, t);
+    osc.frequency.exponentialRampToValueAtTime(900, t + 0.18);
+    osc.frequency.setValueAtTime(1200, t + 0.22);
+    osc.frequency.exponentialRampToValueAtTime(800, t + 0.42);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.018, t + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(t);
+    osc.stop(t + 0.55);
+  }
+
+  function playCannon() {
+    if (!ctx || muted) return;
+    resume();
+    const t = ctx.currentTime;
+    const buffer = noiseBuffer(0.35, 1200);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = 350;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.25, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+    source.connect(lowpass);
+    lowpass.connect(gain);
+    gain.connect(master);
+    source.start(t);
+    source.stop(t + 0.35);
+
+    const thud = ctx.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(90, t);
+    thud.frequency.exponentialRampToValueAtTime(40, t + 0.4);
+    const thudGain = ctx.createGain();
+    thudGain.gain.setValueAtTime(0.12, t);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    thud.connect(thudGain);
+    thudGain.connect(master);
+    thud.start(t);
+    thud.stop(t + 0.42);
+  }
+
+  function playBell() {
+    if (!ctx || muted) return;
+    resume();
+    const t = ctx.currentTime;
+    const fundamental = 880;
+    [1, 1.5, 2].forEach((ratio, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = fundamental * ratio;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.06 / (i + 1), t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 2.2);
+      osc.connect(gain);
+      gain.connect(master);
+      osc.start(t);
+      osc.stop(t + 2.3);
+    });
+  }
+
+  function playExplosion() {
+    if (!ctx || muted) return;
+    resume();
+    const t = ctx.currentTime;
+    const buffer = noiseBuffer(1.2, 600);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(600, t);
+    lowpass.frequency.exponentialRampToValueAtTime(80, t + 0.9);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.18, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
+    source.connect(lowpass);
+    lowpass.connect(gain);
+    gain.connect(master);
+    source.start(t);
+    source.stop(t + 1.2);
+  }
+
+  function playSunk() {
+    playBell();
+    setTimeout(() => playExplosion(), 120);
+  }
+
+  function setMuted(m) {
+    muted = m;
+    if (master) {
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setTargetAtTime(muted ? 0 : 0.35, ctx.currentTime, 0.05);
+    }
+  }
+
+  return {
+    resume,
+    playCannon,
+    playSunk,
+    setMuted,
+    get muted() { return muted; }
+  };
+})();
+
+const muteToggle = document.getElementById('mute-toggle');
+if (muteToggle) {
+  muteToggle.addEventListener('click', () => {
+    AudioSys.resume();
+    const nowMuted = !AudioSys.muted;
+    AudioSys.setMuted(nowMuted);
+    muteToggle.textContent = nowMuted ? 'Sound off' : 'Sound on';
+    muteToggle.setAttribute('aria-pressed', String(nowMuted));
+    muteToggle.setAttribute('aria-label', nowMuted ? 'Sound is off' : 'Sound is on');
+  });
+}
+
+document.body.addEventListener('pointerdown', () => AudioSys.resume(), { once: true });
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function parseBuildLog(md) {
+  const entries = [];
+  const blocks = md.split(/\n##\s+/).slice(1);
+  for (const block of blocks) {
+    const lines = block.split('\n');
+    const title = lines[0].replace(/^\d+\.\s*/, '').trim();
+    let symptom = '';
+    let fix = '';
+    let file = '';
+    for (const line of lines) {
+      const s = line.match(/^-\s*\*\*Symptom\*\*:\s*(.+)$/);
+      if (s) symptom = s[1].trim();
+      const f = line.match(/^-\s*\*\*Fix\*\*:\s*(.+)$/);
+      if (f) fix = f[1].trim();
+      const fl = line.match(/^-\s*\*\*File\*\*:\s*`?([^`]+)`?$/);
+      if (fl) file = fl[1].trim();
+    }
+    if (title || symptom || fix) {
+      entries.push({ title, symptom, fix, file });
+    }
+  }
+  return entries;
+}
+
+function renderBuildLog(entries) {
+  const list = document.getElementById('build-log-list');
+  const total = document.getElementById('build-log-total');
+  const count = document.getElementById('build-log-count');
+  if (!list) return;
+  list.innerHTML = '';
+  entries.forEach(entry => {
+    const li = document.createElement('li');
+    li.innerHTML = `
+      <span class="bug-title">${escapeHtml(entry.title)}</span>
+      <span class="bug-line">${escapeHtml(entry.symptom)}</span>
+      <span class="bug-line">${escapeHtml(entry.fix)}</span>
+      ${entry.file && entry.file.toLowerCase() !== 'n/a' ? `<span class="bug-file">${escapeHtml(entry.file)}</span>` : ''}
+    `;
+    list.appendChild(li);
+  });
+  if (total) total.textContent = entries.length;
+  if (count) count.textContent = `${entries.length} bug${entries.length === 1 ? '' : 's'} caught`;
+}
+
+async function loadBuildLog() {
+  try {
+    const res = await fetch('BUGS.md');
+    if (!res.ok) return;
+    const md = await res.text();
+    renderBuildLog(parseBuildLog(md));
+  } catch (e) {
+    // build log is optional
+  }
+}
+
+const buildLog = document.getElementById('build-log');
+const buildLogToggle = document.getElementById('build-log-toggle');
+if (buildLog && buildLogToggle) {
+  buildLogToggle.addEventListener('click', () => {
+    buildLog.classList.toggle('open');
+    const open = buildLog.classList.contains('open');
+    buildLog.setAttribute('aria-expanded', String(open));
+  });
+}
+
+function initTilt() {
+  const stage = document.getElementById('stage');
+  const inner = stage ? stage.querySelector('.stage-inner') : null;
+  if (!stage || !inner) return;
+
+  let targetX = 0;
+  let targetY = 0;
+  let currentX = 0;
+  let currentY = 0;
+  let raf = null;
+  let hovering = false;
+
+  function animate() {
+    currentX += (targetX - currentX) * 0.12;
+    currentY += (targetY - currentY) * 0.12;
+    inner.style.transform = `rotateX(${currentY}deg) rotateY(${currentX}deg)`;
+
+    if (!hovering && Math.abs(currentX) < 0.05 && Math.abs(currentY) < 0.05) {
+      inner.style.transform = 'rotateX(0deg) rotateY(0deg)';
+      raf = null;
+      return;
+    }
+    raf = requestAnimationFrame(animate);
+  }
+
+  stage.addEventListener('mouseenter', () => {
+    hovering = true;
+    if (!raf) animate();
+  }, { passive: true });
+
+  stage.addEventListener('mousemove', (e) => {
+    const rect = stage.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width - 0.5;
+    const y = (e.clientY - rect.top) / rect.height - 0.5;
+    targetX = x * 2.5;
+    targetY = -y * 2.5;
+  }, { passive: true });
+
+  stage.addEventListener('mouseleave', () => {
+    hovering = false;
+    targetX = 0;
+    targetY = 0;
+  }, { passive: true });
+}
+
 initGame();
+loadBuildLog();
+initTilt();
