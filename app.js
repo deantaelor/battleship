@@ -17,6 +17,43 @@ const STATUS = {
 
 let state = null;
 let lastReplay = null;
+let prng = null;
+
+function cyrb53(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return h1 >>> 0;
+}
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function setSeed(seed) {
+  const numeric = typeof seed === 'number' ? seed >>> 0 : cyrb53(String(seed));
+  prng = mulberry32(numeric);
+}
+
+function rng() {
+  if (!prng) setSeed(Math.floor(Math.random() * 0xffffffff));
+  return prng();
+}
+
+function generateSeed() {
+  return Math.random().toString(36).slice(2, 10);
+}
 
 const playerBoardEl = document.getElementById('player-board');
 const enemyBoardEl = document.getElementById('enemy-board');
@@ -78,9 +115,9 @@ function placeShipsRandomly(board, ships) {
     let attempts = 0;
     while (!placed && attempts < 1000) {
       attempts++;
-      const horizontal = Math.random() < 0.5;
-      const row = Math.floor(Math.random() * BOARD_SIZE);
-      const col = Math.floor(Math.random() * BOARD_SIZE);
+      const horizontal = rng() < 0.5;
+      const row = Math.floor(rng() * BOARD_SIZE);
+      const col = Math.floor(rng() * BOARD_SIZE);
       if (canPlace(board, ship, row, col, horizontal)) {
         placeShip(board, ship, row, col, horizontal);
         placed = true;
@@ -91,6 +128,9 @@ function placeShipsRandomly(board, ships) {
 }
 
 function initGame() {
+  const seed = generateSeed();
+  setSeed(seed);
+
   const playerBoard = createEmptyBoard();
   const enemyBoard = createEmptyBoard();
   const playerShips = cloneShips();
@@ -121,7 +161,7 @@ function initGame() {
     abortAutonomous: false,
     autonomousOrder: null,
     shotCount: 0,
-    lastIdleShot: 0,
+    seed,
     history: []
   };
 
@@ -274,7 +314,6 @@ function endGame(winner) {
   finishAutonomous();
   updateStatus(`Game over — ${winner === 'Player' ? 'you' : 'the enemy'} won.`);
   log(`Game over — ${winner === 'Player' ? 'you' : 'the enemy'} won.`);
-  Devin.say(winner === 'Player' ? 'win' : 'lose');
   render();
   saveReplay(winner);
   setTimeout(() => showReplayPrompt(winner), 400);
@@ -286,8 +325,189 @@ function saveReplay(winner) {
     shotCount: state.shotCount,
     history: state.history.map(h => ({ ...h })),
     playerShips: deepCloneShips(state.playerShips),
-    enemyShips: deepCloneShips(state.enemyShips)
+    enemyShips: deepCloneShips(state.enemyShips),
+    seed: state.seed,
+    difficulty: state.difficulty
   };
+}
+
+function coordToCode(r, c) {
+  return String.fromCharCode(65 + r) + c.toString();
+}
+
+function codeToCoord(code) {
+  if (code.length < 2) return null;
+  const r = code.toUpperCase().charCodeAt(0) - 65;
+  const c = parseInt(code[1], 10);
+  if (r < 0 || r >= BOARD_SIZE || isNaN(c) || c < 0 || c >= BOARD_SIZE) return null;
+  return { r, c };
+}
+
+function encodeMoves(history) {
+  return history
+    .filter(h => h.actor === 'player')
+    .map(h => coordToCode(h.r, h.c))
+    .join('');
+}
+
+function decodeMoves(str) {
+  const moves = [];
+  for (let i = 0; i < str.length; i += 2) {
+    const code = str.slice(i, i + 2);
+    const coord = codeToCoord(code);
+    if (coord) moves.push(coord);
+  }
+  return moves;
+}
+
+function simulateGame(seed, moves, difficulty) {
+  setSeed(seed);
+  const simState = {
+    playerBoard: createEmptyBoard(),
+    enemyBoard: createEmptyBoard(),
+    playerShips: cloneShips(),
+    enemyShips: cloneShips(),
+    difficulty,
+    shotCount: 0,
+    history: []
+  };
+
+  placeShipsRandomly(simState.playerBoard, simState.playerShips);
+  placeShipsRandomly(simState.enemyBoard, simState.enemyShips);
+
+  const prevState = state;
+  state = simState;
+
+  let winner = null;
+  for (const move of moves) {
+    if (winner) break;
+
+    simState.shotCount++;
+    const pRes = fire(simState.enemyBoard, simState.enemyShips, move.r, move.c);
+    if (pRes.alreadyFired) continue;
+    if (pRes.hit && pRes.sunk) pRes.ship.sunkAt = simState.shotCount;
+    simState.history.push({
+      actor: 'player',
+      r: move.r,
+      c: move.c,
+      result: pRes.hit ? (pRes.sunk ? 'sunk' : 'hit') : 'miss',
+      shipName: pRes.ship ? pRes.ship.name : null,
+      shipId: pRes.ship ? pRes.ship.id : null,
+      reason: null,
+      shotNumber: simState.shotCount
+    });
+    if (allSunk(simState.enemyShips)) {
+      winner = 'Player';
+      break;
+    }
+
+    const pick = chooseEnemyShot();
+    if (pick) {
+      simState.shotCount++;
+      const eRes = fire(simState.playerBoard, simState.playerShips, pick.r, pick.c);
+      if (eRes.hit && eRes.sunk) eRes.ship.sunkAt = simState.shotCount;
+      simState.history.push({
+        actor: 'enemy',
+        r: pick.r,
+        c: pick.c,
+        result: eRes.hit ? (eRes.sunk ? 'sunk' : 'hit') : 'miss',
+        shipName: eRes.ship ? eRes.ship.name : null,
+        shipId: eRes.ship ? eRes.ship.id : null,
+        reason: pick.reason,
+        heatValue: pick.heatValue,
+        shotNumber: simState.shotCount
+      });
+      if (allSunk(simState.playerShips)) {
+        winner = 'Enemy';
+        break;
+      }
+    }
+  }
+
+  state = prevState;
+
+  return {
+    winner,
+    shotCount: simState.shotCount,
+    history: simState.history,
+    playerShips: deepCloneShips(simState.playerShips),
+    enemyShips: deepCloneShips(simState.enemyShips),
+    seed,
+    difficulty
+  };
+}
+
+function buildShareUrl(replay = lastReplay) {
+  if (!replay) return null;
+  const moves = replay.history ? encodeMoves(replay.history) : '';
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set('s', replay.seed || '');
+  url.searchParams.set('m', moves);
+  if (replay.difficulty) url.searchParams.set('d', replay.difficulty);
+  return url.toString();
+}
+
+async function copyToClipboard(text) {
+  try {
+    await Promise.race([
+      navigator.clipboard.writeText(text),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500))
+    ]);
+    return true;
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      return true;
+    } catch (err) {
+      document.body.removeChild(ta);
+      return false;
+    }
+  }
+}
+
+async function shareReplay() {
+  const url = buildShareUrl();
+  if (!url) {
+    updateStatus('No replay available to share.');
+    return;
+  }
+  const copied = await copyToClipboard(url);
+  if (copied) {
+    updateStatus('Replay link copied to clipboard.');
+  } else {
+    window.prompt('Copy this replay link:', url);
+  }
+}
+
+function loadReplayFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const seed = params.get('s');
+  const movesParam = params.get('m');
+  if (!seed || !movesParam) return false;
+  const moves = decodeMoves(movesParam);
+  if (moves.length === 0) return false;
+  const difficulty = params.get('d') || 'random';
+  try {
+    lastReplay = simulateGame(seed, moves, difficulty);
+    if (!lastReplay.winner) {
+      if (allSunk(lastReplay.enemyShips)) lastReplay.winner = 'Player';
+      else if (allSunk(lastReplay.playerShips)) lastReplay.winner = 'Enemy';
+      else lastReplay.winner = 'Player';
+    }
+    const hero = document.getElementById('hero');
+    if (hero) hero.style.display = 'none';
+    startReplay();
+    return true;
+  } catch (e) {
+    console.error('Failed to load replay from URL:', e);
+    return false;
+  }
 }
 
 async function fireAtEnemy(shooter, r, c, reason) {
@@ -322,15 +542,12 @@ async function fireAtEnemy(shooter, r, c, reason) {
       msg += ` — sunk ${result.ship.theme} — ${result.ship.tagline}`;
       statusMsg = `${shooter} sunk ${result.ship.theme}`;
       AudioSys.playSunk();
-      Devin.say('playerSink', { ship: result.ship });
     } else if (result.hit) {
       msg += ` — hit.`;
       statusMsg = `${shooter} hit!`;
-      Devin.say('playerHit');
     } else {
       msg += ` — miss.`;
       statusMsg = `${shooter} missed.`;
-      Devin.say('playerMiss');
     }
     if (reason) msg += ` (${reason})`;
     updateStatus(statusMsg);
@@ -349,7 +566,6 @@ async function fireAtEnemy(shooter, r, c, reason) {
         return true;
       }
       state.turn = 'enemy';
-      Devin.maybeIdle();
       enemyTurn();
       return true;
     }
@@ -362,7 +578,6 @@ async function fireAtEnemy(shooter, r, c, reason) {
     }
 
     state.turn = 'enemy';
-    Devin.maybeIdle();
     setTimeout(enemyTurn, 600);
     return true;
   } finally {
@@ -408,7 +623,7 @@ function getAdjacentCells(r, c) {
 function pickRandomCell(board) {
   const cells = getAvailableCells(board);
   if (cells.length === 0) return null;
-  return cells[Math.floor(Math.random() * cells.length)];
+  return cells[Math.floor(rng() * cells.length)];
 }
 
 function manhattan(a, b) {
@@ -526,7 +741,7 @@ function chooseEnemyShot() {
         }
       }
       if (candidates.length > 0) {
-        const { cell, hit } = candidates[Math.floor(Math.random() * candidates.length)];
+        const { cell, hit } = candidates[Math.floor(rng() * candidates.length)];
         const dir = directionFrom(hit, cell);
         return { ...cell, reason: `working outward from the hit at ${coordLabel(hit.r, hit.c)} toward the ${dir}`, heatValue: heat[cell.r][cell.c] };
       }
@@ -597,11 +812,9 @@ async function enemyTurn() {
     msg = `${msgBase} — hit and sunk your ${result.ship.name}! (${reason})`;
     updateStatus(`Enemy sank your ${result.ship.name}!`);
     AudioSys.playSunk();
-    Devin.say('enemySink', { ship: result.ship });
   } else if (result.hit) {
     msg = `${msgBase} — hit. (${reason})`;
     updateStatus('Enemy hit!');
-    Devin.say('enemyHit');
   } else {
     msg = `${msgBase} — miss. (${reason})`;
     updateStatus('Enemy missed.');
@@ -614,8 +827,7 @@ async function enemyTurn() {
       return;
     }
     state.turn = 'player';
-    Devin.maybeIdle();
-    if (state.autonomousActive && !state.abortAutonomous) {
+      if (state.autonomousActive && !state.abortAutonomous) {
       autonomousStep();
     }
     return;
@@ -629,7 +841,6 @@ async function enemyTurn() {
   }
 
   state.turn = 'player';
-  Devin.maybeIdle();
 
   if (state.autonomousActive && !state.abortAutonomous) {
     setTimeout(autonomousStep, 600);
@@ -760,7 +971,7 @@ function gunnerPick(order) {
         }
       }
       if (candidates.length > 0) {
-        const { cell, hit } = candidates[Math.floor(Math.random() * candidates.length)];
+        const { cell, hit } = candidates[Math.floor(rng() * candidates.length)];
         return { ...cell, reason: `the ship hit at ${coordLabel(hit.r, hit.c)} is still open; ${coordLabel(cell.r, cell.c)} should finish it` };
       }
     }
@@ -799,7 +1010,7 @@ function gunnerPick(order) {
   if (coord && /around|near|close|adjacent|next to/.test(text)) {
     const candidates = getAdjacentCells(coord.r, coord.c).filter(cell => isUnknown(board[cell.r][cell.c]));
     if (candidates.length > 0) {
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      const pick = candidates[Math.floor(rng() * candidates.length)];
       return { ...pick, reason: `searching around ${coordLabel(coord.r, coord.c)}; ${coordLabel(pick.r, pick.c)} is the best open neighbor` };
     }
     const { best } = pickBestFromHeat(board, ships);
@@ -814,7 +1025,7 @@ function gunnerPick(order) {
     if (candidates.length > 0) {
       const { best } = pickBestInFilter(board, ships, quad.filter);
       if (best) return { ...best, reason: `working the ${quad.name} quarter; ${coordLabel(best.r, best.c)} is the best untested cell there` };
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      const pick = candidates[Math.floor(rng() * candidates.length)];
       return { ...pick, reason: `working the ${quad.name} quarter; ${coordLabel(pick.r, pick.c)} is open` };
     }
     const { best } = pickBestFromHeat(board, ships);
@@ -828,7 +1039,7 @@ function gunnerPick(order) {
     if (candidates.length > 0) {
       const { best } = pickBestInFilter(board, ships, (r, c) => r >= 3 && r <= 6 && c >= 3 && c <= 6);
       if (best) return { ...best, reason: `the center still has the most room; ${coordLabel(best.r, best.c)} is the best central probe` };
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      const pick = candidates[Math.floor(rng() * candidates.length)];
       return { ...pick, reason: `probing the center at ${coordLabel(pick.r, pick.c)}` };
     }
     const { best } = pickBestFromHeat(board, ships);
@@ -887,7 +1098,6 @@ function planAdvised() {
   const order = orderInput.value.trim();
   if (!order) {
     updateStatus('Type an order for the gunner first.');
-    Devin.say('orderUnclear');
     return;
   }
   const pick = gunnerPick(order);
@@ -899,7 +1109,6 @@ function planAdvised() {
   proposalEl.textContent = `Gunner proposes firing at ${coordLabel(pick.r, pick.c)}. “${pick.reason}” Click another cell to override, or Fire to approve.`;
   approveBtn.style.display = 'inline-block';
   updateStatus('Proposal ready. Approve or override.');
-  Devin.say('orderReceived');
 }
 
 function startAutonomous() {
@@ -907,7 +1116,6 @@ function startAutonomous() {
   const order = orderInput.value.trim();
   if (!order) {
     updateStatus('Type an order for the gunner first.');
-    Devin.say('orderUnclear');
     return;
   }
   state.autonomousActive = true;
@@ -915,7 +1123,6 @@ function startAutonomous() {
   state.autonomousOrder = order;
   updateAutonomyUI();
   log(`Gunner: “Engaging on order: ${order}”`);
-  Devin.say('orderReceived');
   autonomousStep();
 }
 
@@ -1053,6 +1260,8 @@ reportEl.addEventListener('click', e => {
     reportEl.style.display = 'none';
   } else if (e.target.matches('#report-watch-again')) {
     startReplay();
+  } else if (e.target.matches('#report-share')) {
+    shareReplay();
   }
 });
 
@@ -1103,6 +1312,7 @@ function showReport(winner, data = state) {
     ${winner === 'Player' ? `<p>${longestEnemy} held out the longest.</p>` : ''}
     <div class="report-actions">
       <button id="report-close" class="pill-btn primary">Close</button>
+      <button id="report-share" class="pill-btn">Share replay</button>
       <button id="report-watch-again" class="pill-btn">Watch again</button>
     </div>
   `;
@@ -1173,148 +1383,6 @@ function buildInsight(enemyShots, playerShips, wasted, drySpell) {
 
   return parts.join(' ');
 }
-
-const Devin = (function () {
-  const used = new Set();
-  let muted = false;
-  let hideTimer = null;
-  const bubble = document.getElementById('devin-bubble');
-  const muteBtn = document.getElementById('devin-mute');
-  const avatar = document.getElementById('devin-avatar');
-  const tooltip = document.getElementById('devin-tooltip');
-
-  const lines = {
-    playerHit: [
-      'there you go',
-      'clean shot',
-      'that had to feel good',
-      'you were fishing for that one'
-    ],
-    playerMiss: [
-      'worth the try',
-      'we all miss sometimes',
-      'the pattern-density AI just laughed'
-    ],
-    playerSink: [
-      ({ ship }) => `and that's ${ship.theme}, gone`,
-      ({ ship }) => `${ship.tagline} — earned that one`,
-      ({ ship }) => `there goes ${ship.theme}`
-    ],
-    enemyHit: [
-      'ouch',
-      'they had a read on you',
-      'keep your composure'
-    ],
-    enemySink: [
-      ({ ship }) => `the ${ship.name} goes down. she held out.`
-    ],
-    orderReceived: [
-      'on it',
-      'working it now'
-    ],
-    orderUnclear: [
-      "not sure what you mean, want to rephrase?"
-    ],
-    idle: [
-      "you're taking your time, i respect it",
-      'the top-right quadrant is still wide open',
-      "just an observation: you haven't fired left of column D",
-      'the enemy AI is warming up its probability map',
-      'nice pace. methodical beats lucky most days'
-    ],
-    win: [
-      'GG',
-      'clean game',
-      'you sunk them all, well done'
-    ],
-    lose: [
-      'that one hurt',
-      'next time'
-    ]
-  };
-
-  function getText(line, ctx) {
-    return typeof line === 'function' ? line(ctx) : line;
-  }
-
-  function say(category, ctx = {}) {
-    if (muted) return;
-    if (category !== 'win' && category !== 'lose') {
-      if (!state || state.gameOver) return;
-    }
-
-    const pool = lines[category] || [];
-    if (pool.length === 0) return;
-
-    const available = pool.filter(l => !used.has(getText(l, ctx)));
-    if (available.length === 0) {
-      pool.forEach(l => used.delete(getText(l, ctx)));
-      available.push(...pool);
-    }
-
-    const line = available[Math.floor(Math.random() * available.length)];
-    const text = getText(line, ctx);
-    used.add(text);
-    show(text);
-  }
-
-  function show(text) {
-    if (!bubble) return;
-    bubble.textContent = text;
-    bubble.classList.add('visible');
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => {
-      bubble.classList.remove('visible');
-    }, 4000);
-  }
-
-  function maybeIdle() {
-    if (muted || !state || state.gameOver) return;
-    if (typeof state.lastIdleShot === 'undefined') state.lastIdleShot = 0;
-    const threshold = 8 + Math.floor(Math.random() * 3);
-    if (state.shotCount - state.lastIdleShot >= threshold) {
-      say('idle');
-      state.lastIdleShot = state.shotCount;
-    }
-  }
-
-  function setMuted(m) {
-    muted = m;
-    if (muteBtn) {
-      muteBtn.textContent = muted ? 'Devin off' : 'Devin on';
-      muteBtn.setAttribute('aria-pressed', String(muted));
-      muteBtn.setAttribute('aria-label', muted ? 'Devin is muted' : 'Devin is speaking');
-    }
-  }
-
-  function toggle() {
-    setMuted(!muted);
-  }
-
-  function toggleTooltip(show) {
-    if (!tooltip) return;
-    tooltip.classList.toggle('visible', show);
-  }
-
-  if (muteBtn) {
-    muteBtn.addEventListener('click', toggle);
-  }
-
-  if (avatar) {
-    avatar.addEventListener('mouseenter', () => toggleTooltip(true));
-    avatar.addEventListener('mouseleave', () => toggleTooltip(false));
-    avatar.addEventListener('focus', () => toggleTooltip(true));
-    avatar.addEventListener('blur', () => toggleTooltip(false));
-    avatar.addEventListener('click', () => toggleTooltip(!tooltip.classList.contains('visible')));
-  }
-
-  if (tooltip) {
-    tooltip.addEventListener('mouseenter', () => toggleTooltip(true));
-    tooltip.addEventListener('mouseleave', () => toggleTooltip(false));
-  }
-
-  return { say, maybeIdle, setMuted, toggle, lines };
-})();
 
 const AudioSys = (function () {
   let ctx = null;
@@ -1918,6 +1986,93 @@ if (replaySpeedInput) {
   });
 }
 
-initGame();
+const evalRunBtn = document.getElementById('eval-run');
+const evalResultsEl = document.getElementById('eval-results');
+const evalTrialsInput = document.getElementById('eval-trials');
+
+function deepCloneBoard(board) {
+  return board.map(row => row.map(cell => ({ ...cell })));
+}
+
+function evaluateDifficulty(difficulty, playerBoard, playerShips) {
+  const prevState = state;
+  state = { playerBoard, playerShips, difficulty };
+  let shots = 0, hits = 0, misses = 0, wasted = 0;
+  while (!allSunk(playerShips) && shots < 200) {
+    const pick = chooseEnemyShot();
+    if (!pick) break;
+    const res = fire(playerBoard, playerShips, pick.r, pick.c);
+    if (res.alreadyFired) continue;
+    shots++;
+    if (res.hit) {
+      hits++;
+    } else {
+      misses++;
+      if (pick.heatValue === 0) wasted++;
+    }
+  }
+  state = prevState;
+  return { shots, hits, misses, wasted, won: allSunk(playerShips) };
+}
+
+async function runEvaluation() {
+  const trials = parseInt(evalTrialsInput ? evalTrialsInput.value : 20, 10) || 20;
+  const difficulties = ['random', 'hunt', 'probability'];
+  const results = {};
+  for (const d of difficulties) {
+    results[d] = { shots: 0, hits: 0, misses: 0, wasted: 0, wins: 0, trials: 0 };
+  }
+
+  updateStatus('Running AI evaluation...');
+  if (evalRunBtn) evalRunBtn.disabled = true;
+  if (evalResultsEl) evalResultsEl.innerHTML = '<p>Running simulations...</p>';
+
+  for (let i = 0; i < trials; i++) {
+    setSeed(generateSeed());
+    const board = createEmptyBoard();
+    const ships = cloneShips();
+    placeShipsRandomly(board, ships);
+
+    for (const d of difficulties) {
+      setSeed(generateSeed());
+      const b = deepCloneBoard(board);
+      const s = deepCloneShips(ships);
+      const r = evaluateDifficulty(d, b, s);
+      if (!r.won) continue;
+      results[d].trials++;
+      results[d].shots += r.shots;
+      results[d].hits += r.hits;
+      results[d].misses += r.misses;
+      results[d].wasted += r.wasted;
+      results[d].wins += 1;
+    }
+
+    if (i % 5 === 0 && evalResultsEl) {
+      evalResultsEl.innerHTML = `<p>Running simulations… ${i + 1}/${trials}</p>`;
+      await delay(0);
+    }
+  }
+
+  if (evalRunBtn) evalRunBtn.disabled = false;
+  updateStatus('AI evaluation complete.');
+  renderEvalResults(results);
+}
+
+function renderEvalResults(results) {
+  if (!evalResultsEl) return;
+  const rows = ['random', 'hunt', 'probability'].map(d => {
+    const r = results[d];
+    const avg = r.trials ? (r.shots / r.trials).toFixed(1) : '—';
+    const acc = r.shots ? Math.round((r.hits / r.shots) * 100) : 0;
+    const wasted = r.trials ? (r.wasted / r.trials).toFixed(1) : '—';
+    const name = d === 'random' ? 'Random' : d === 'hunt' ? 'Hunt & Target' : 'Probability Density';
+    return `<tr><td>${name}</td><td>${r.trials}</td><td>${avg}</td><td>${acc}%</td><td>${wasted}</td></tr>`;
+  }).join('');
+  evalResultsEl.innerHTML = `<table><thead><tr><th>AI</th><th>Trials</th><th>Avg shots to sink</th><th>Accuracy</th><th>Avg wasted shots</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+if (evalRunBtn) evalRunBtn.addEventListener('click', runEvaluation);
+
+if (!loadReplayFromUrl()) initGame();
 loadBuildLog();
 initTilt();

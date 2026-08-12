@@ -85,3 +85,21 @@ Keep a running list of issues we hit while building, plus how we fixed them.
 - **Fix**: Changed `.replay-overlay` from `align-items: center` to `align-items: flex-start` with extra top padding, and set `.replay-card` to `max-height: calc(100vh - 4rem)` with `overflow-y: auto`. Reduced replay board cell size with `.replay-boards { --cell-size: 24px; }` so the card fits better on small screens.
 - **File**: `style.css`
 - **Date**: 2026-08-11
+
+## 15. Shareable replay URL replayed as a win before the game was over
+- **Symptom**: Opening a replay URL with too few moves showed the after-action report as "You won in X turns" while also reporting 0 enemy ships sunk.
+- **Fix**: `loadReplayFromUrl()` now infers the winner from the simulated board state (`allSunk(...)`) instead of defaulting to `Player`, and `shareReplay()` only becomes available from completed games. Added `simulateGame()` to reconstruct a full replay from a deterministic seed and move list.
+- **File**: `app.js`
+- **Date**: 2026-08-10
+
+## 16. `navigator.clipboard.writeText()` could hang and leave no user feedback
+- **Symptom**: The "Share replay" button sometimes produced no visible response because `navigator.clipboard.writeText()` never resolved or failed silently.
+- **Fix**: Wrapped the clipboard write in a `Promise.race` with a 1.5s timeout, then fall back to `document.execCommand('copy')` and a `window.prompt()` with the URL as a last resort.
+- **File**: `app.js`
+- **Date**: 2026-08-10
+
+## 17. AI evaluation had no UI and required a backend to compare algorithms
+- **Symptom**: There was no way to demonstrate that the probability-density AI outperforms random fire.
+- **Fix**: Added an in-browser AI Evaluation Lab that runs the three enemy AIs against cloned random fleets, averages shots to sink, accuracy, and wasted shots, and renders a results table.
+- **File**: `index.html`, `style.css`, `app.js`
+- **Date**: 2026-08-10

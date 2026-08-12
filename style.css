@@ -302,6 +302,82 @@ main {
 
 #log-list li:last-child { border-bottom: none; }
 
+.ai-eval {
+  margin-top: 2.5rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 1.5rem;
+}
+
+.ai-eval h2 {
+  font-family: var(--font-heading);
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}
+
+.ai-eval-desc {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0 0 1rem;
+  line-height: 1.6;
+}
+
+.ai-eval-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.ai-eval-controls label {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.ai-eval-controls input {
+  width: 4rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.ai-eval-results {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.ai-eval-results table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ai-eval-results th,
+.ai-eval-results td {
+  text-align: left;
+  padding: 0.55rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.ai-eval-results th {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ai-eval-results td {
+  color: var(--muted);
+}
+
 .report-overlay {
   position: fixed;
   inset: 0;
@@ -680,153 +756,6 @@ main {
   margin-top: 0.4rem;
 }
 
-.devin {
-  position: fixed;
-  bottom: 1rem;
-  right: 1rem;
-  z-index: 250;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.5rem;
-  pointer-events: none;
-}
-
-.devin-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  pointer-events: auto;
-}
-
-.devin-avatar {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  box-shadow: 0 6px 18px rgba(60, 78, 92, 0.1);
-  cursor: pointer;
-  position: relative;
-  animation: devinBreathe 4s ease-in-out infinite;
-  pointer-events: auto;
-  transition: transform 0.2s ease;
-}
-
-.devin-avatar:hover {
-  transform: scale(1.04);
-}
-
-.devin-avatar svg {
-  width: 100%;
-  height: 100%;
-}
-
-.devin-eye {
-  transform-origin: center;
-  animation: devinBlink 5s infinite;
-}
-
-.devin-q {
-  position: absolute;
-  bottom: -2px;
-  right: -2px;
-  width: 18px;
-  height: 18px;
-  background: var(--text);
-  color: var(--bg);
-  border-radius: 50%;
-  font-size: 0.65rem;
-  line-height: 18px;
-  text-align: center;
-  font-family: var(--font-mono);
-}
-
-.devin-bubble {
-  max-width: 240px;
-  padding: 0.75rem 1rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 16px 16px 0 16px;
-  box-shadow: 0 4px 16px rgba(60, 78, 92, 0.08);
-  font-size: 0.78rem;
-  color: var(--text);
-  line-height: 1.55;
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity 0.3s ease, transform 0.3s ease;
-  pointer-events: auto;
-}
-
-.devin-bubble.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.devin-mute {
-  font-size: 0.65rem;
-  padding: 0.35rem 0.6rem;
-  border-radius: 999px;
-  pointer-events: auto;
-}
-
-.devin-tooltip {
-  position: fixed;
-  bottom: 5.5rem;
-  right: 1rem;
-  width: 260px;
-  padding: 1rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 6px 20px rgba(60, 78, 92, 0.1);
-  font-size: 0.78rem;
-  color: var(--text);
-  line-height: 1.6;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(8px);
-  transition: opacity 0.2s ease, transform 0.2s ease;
-  z-index: 260;
-  pointer-events: auto;
-}
-
-.devin-tooltip.visible {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-.devin-tooltip p {
-  margin: 0;
-}
-
-@media (max-width: 600px) {
-  .devin-avatar {
-    width: 48px;
-    height: 48px;
-  }
-  .devin-bubble {
-    max-width: 180px;
-    font-size: 0.72rem;
-  }
-  .devin-tooltip {
-    width: calc(100vw - 2rem);
-    right: 0.5rem;
-    left: 0.5rem;
-  }
-}
-
-@keyframes devinBreathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.03); }
-}
-
-@keyframes devinBlink {
-  0%, 45%, 55%, 100% { transform: scaleY(1); }
-  50% { transform: scaleY(0.1); }
-}
-
 @media (min-width: 700px) {
   :root { --cell-size: 36px; }
 }
@@ -847,7 +776,6 @@ main {
   .status,
   .stage,
   .logs:not(.build-log),
-  .devin,
   .hero-overlay,
   .replay-overlay,
   .report-overlay,

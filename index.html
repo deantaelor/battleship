@@ -68,6 +68,17 @@
         <ul id="log-list"></ul>
       </section>
 
+      <section id="ai-eval" class="ai-eval">
+        <h2>AI Evaluation Lab</h2>
+        <p class="ai-eval-desc">Pit the three enemy AIs against random fleets and compare how many shots each needs to sink every ship.</p>
+        <div class="ai-eval-controls">
+          <label for="eval-trials">Trials</label>
+          <input id="eval-trials" type="number" value="20" min="1" max="200">
+          <button id="eval-run" class="pill-btn primary" type="button">Run evaluation</button>
+        </div>
+        <div id="eval-results" class="ai-eval-results"></div>
+      </section>
+
       <section id="build-log" class="build-log open" aria-expanded="true">
         <button id="build-log-toggle" class="build-log-tab pill-btn">
           <span>Devin session</span>
@@ -155,26 +166,6 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <div id="devin" class="devin" aria-label="Devin companion">
-    <div id="devin-bubble" class="devin-bubble" aria-live="polite"></div>
-    <div class="devin-row">
-      <div class="devin-avatar" id="devin-avatar" aria-label="Devin" role="button" tabindex="0">
-        <svg viewBox="0 0 80 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <rect x="14" y="14" width="52" height="52" rx="26" fill="#D6E0D8" />
-          <circle class="devin-eye" cx="30" cy="34" r="4" fill="#3C4E5C" />
-          <circle class="devin-eye" cx="50" cy="34" r="4" fill="#3C4E5C" />
-          <path d="M28 52 Q40 59 52 52" stroke="#3C4E5C" fill="none" stroke-width="2.5" stroke-linecap="round" />
-        </svg>
-        <span class="devin-q" aria-hidden="true">?</span>
-      </div>
-      <button id="devin-mute" class="devin-mute pill-btn" aria-pressed="false" aria-label="Devin is speaking">Devin on</button>
-    </div>
-  </div>
-
-  <div id="devin-tooltip" class="devin-tooltip" aria-hidden="true">
-    <p>devin is cognition's autonomous software engineer. this whole game was built with devin. see the build log at the bottom of the screen for the receipts.</p>
   </div>
 
   <script src="app.js"></script>
